@@ -416,9 +416,25 @@ class DedupeTests(unittest.TestCase):
         self.assertEqual(history.call_args.kwargs["workflow"], "daily-catchup.yml")
         self.assertEqual(history.call_args.kwargs["sent_step"], "Deliver catchup for ")
 
-    def test_manual_skips_history(self):
-        with patch.object(workflow.G, "already_sent", side_effect=AssertionError("network")):
-            self.assertFalse(workflow.dedupe("daily-catchup.yml", "Deliver catchup for ", DAY, "workflow_dispatch"))
+    def test_manual_recovery_queries_history_and_returns_its_result(self):
+        for accepted in (True, False):
+            with self.subTest(accepted=accepted), \
+                    patch.object(workflow.G, "already_sent", return_value=accepted) as history:
+                self.assertIs(workflow.dedupe("daily-hunch-retention.yml", "Deliver hunch retention for ",
+                                              "2026-10-21", "workflow_dispatch"), accepted)
+            history.assert_called_once()
+            self.assertEqual(history.call_args.args[0], DAY)
+            self.assertEqual(history.call_args.kwargs["workflow"], "daily-hunch-retention.yml")
+            self.assertEqual(history.call_args.kwargs["sent_step"], "Deliver hunch retention for ")
+
+    def test_manual_recovery_fails_closed_on_unavailable_history(self):
+        errors = io.StringIO()
+        with patch.object(workflow.G, "already_sent", side_effect=workflow.G.DedupeUnavailable()), \
+                contextlib.redirect_stderr(errors):
+            with self.assertRaises(workflow.G.DedupeUnavailable):
+                workflow.dedupe("daily-hunch-retention.yml", "Deliver hunch retention for ", DAY,
+                                "workflow_dispatch")
+        self.assertEqual(errors.getvalue(), "")
 
     def test_schedule_fails_open_on_unavailable_history(self):
         errors = io.StringIO()

@@ -22,6 +22,7 @@ Env NOW (ISO) overrides the clock for tests.
 """
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
@@ -102,10 +103,11 @@ def plan(now, tz, target):
     return report_date, wait, wait <= MAX_WAIT
 
 
-def phase2_wait(report_date, now, tz, target):
-    """Seconds phase 2 should sleep, from the absolute target rather than the
-    `remaining` phase 1 computed: gate2 can queue behind gate for an hour."""
-    return min(MAX_SLEEP, _seconds_until(report_date, now, tz, target))
+def phase2_wait(report_date, now, tz, target) -> int:
+    """Whole seconds phase 2 should sleep, from the absolute target rather than
+    the `remaining` phase 1 computed: gate2 can queue behind gate for an hour.
+    Rounded up so the sleep never ends before the target; capped at MAX_SLEEP."""
+    return min(MAX_SLEEP, math.ceil(_seconds_until(report_date, now, tz, target)))
 
 
 def gh_json(path):

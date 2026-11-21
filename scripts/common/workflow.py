@@ -7,7 +7,8 @@ Generic helpers every report uses:
   production send (rerun, manual run without recovery=true or off main, future
   day on a manual run, run created more than 36 h ago)
 * step_name / sent_prefix build the "Deliver <label>[ <PT|IST>] for <D>" markers
-* dedupe(workflow, sent_step, report_date, event) with gate semantics
+* dedupe(workflow, sent_step, report_date, event) for real sends only:
+  schedule fails open on unavailable history; manual recovery fails closed
 
 The digest-specific part (WORKFLOWS, data/email_config.json, settings,
 digest_args, digest_dedupe and the CLI) runs from a checkout or from a
@@ -147,12 +148,16 @@ def _marker(label, edition_label):
 
 
 def dedupe(workflow, sent_step, report_date, event) -> bool:
-    """Gate semantics: a manual dispatch skips history; a scheduled run proceeds
-    on its shared key when history is unavailable; any other event fails closed.
+    """True when a real send for this marker and day already succeeded.
+
+    Call it only for mode == "real", immediately before delivery. Every event
+    checks history: a manual recovery often uses a fresh Resend key, so history
+    is its only duplicate guard. Schedule fails open on unavailable history (its
+    shared key lets Resend dedupe); manual recovery and every other event fail
+    closed by re-raising DedupeUnavailable. Only the gate's phase 1/2 timing
+    skips dedupe on manual runs.
     """
-    if event == "workflow_dispatch":
-        return False
-    day = dt.date.fromisoformat(report_date) if isinstance(report_date, str) else report_date
+    day =dt.date.fromisoformat(report_date) if isinstance(report_date, str) else report_date
     try:
         return G.already_sent(day, G.now_utc(), workflow=workflow, sent_step=sent_step)
     except G.DedupeUnavailable:
@@ -254,7 +259,11 @@ def digest_args(digest, resolved):
 
 
 def digest_dedupe(resolved, digest):
-    """The digest send job's locked check: real sends only, fail closed."""
+    """The digest send job's locked check: real sends only, fail closed.
+
+    Unlike dedupe(), it also fails closed on schedule (the digests' existing
+    behaviour, CLI exit 3), and it skips non-real modes itself.
+    """
     if resolved["mode"] != "real":
         return False
     if resolved["edition"] not in ("pt", "ist"):

@@ -92,6 +92,17 @@ def test_phase2_wait_is_absolute():
     assert g.phase2_wait(rd, far, PT, (5, 45)) == g.MAX_SLEEP
 
 
+def test_phase2_wait_is_whole_seconds_rounded_up():
+    rd = date(2026, 3, 8)
+    target = g.target_for(rd, PT, (5, 5)).astimezone(timezone.utc)
+    for now, expected in ((target - timedelta(seconds=1799, microseconds=500000), 1800),
+                          (target - timedelta(microseconds=1), 1),
+                          (target, 0),
+                          (target - timedelta(hours=10), g.MAX_SLEEP)):
+        wait = g.phase2_wait(rd, now, PT, (5, 5))
+        assert type(wait) is int and wait == expected, (now, wait)
+
+
 def test_second_gate_recomputes_remaining_wait_after_queue_delay():
     now = datetime(2026, 3, 8, 11, 35, tzinfo=timezone.utc)
     assert g.phase2_wait(date(2026, 3, 8), now, PT, "05:05") == 1800
