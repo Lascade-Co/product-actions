@@ -1,0 +1,122 @@
+name: Blog SEO Audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      site:
+        description: 'Audit one site only (blank = all sites in data/seo_sites.json)'
+        required: false
+        type: string
+      blog_count:
+        description: 'How many blogs to audit (blank = the site config value)'
+        required: false
+        type: string
+  schedule:
+    # Daily at 06:00 UTC (10:00 Asia/Muscat)
+    - cron: '0 6 * * *'
+
+permissions:
+  contents: read
+
+env:
+  TELEGRAM_CHAT_ID: '-5312322129'
+
+defaults:
+  run:
+    shell: "seal-bash-e {0}"
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      sites: ${{ steps.list.outputs.sites }}
+    steps:
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: data
+
+      - name: Build the site matrix
+        id: list
+        env:
+          ONLY: ${{ inputs.site }}
+        run: |
+          if [ -n "$ONLY" ]; then
+            SITES=$(jq -c --arg only "$ONLY" '[.[] | select(.name == $only) | .name]' data/seo_sites.json)
+          else
+            SITES=$(jq -c '[.[].name]' data/seo_sites.json)
+          fi
+          if [ "$SITES" = "[]" ]; then
+            echo "No sites matched. Known: $(jq -r '[.[].name] | join(", ")' data/seo_sites.json)" >&2
+            exit 1
+          fi
+          echo "sites=$SITES" >> "$GITHUB_OUTPUT"
+          echo "Matrix: $SITES"
+
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1
+
+  audit:
+    needs: discover
+    runs-on: ubuntu-latest
+    environment: production
+    strategy:
+      fail-fast: false
+      matrix:
+        site: ${{ fromJSON(needs.discover.outputs.sites) }}
+    steps:
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        # Pinned: this is an unwatched daily cron whose HTML parser must not
+        # change under it. Versions match what's installed in the repo's
+        # .venv at the time this wave landed.
+        run: pip install --quiet requests==2.34.2 beautifulsoup4==4.15.0 lxml==6.1.1
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            data
+            scripts/common
+            scripts/seo
+
+      - name: Run the SEO and contextual internal-link audit
+        id: audit
+        env:
+          BLOG_COUNT: ${{ inputs.blog_count }}
+          TELEGRAM_TOKEN: ${{ secrets.SUBSCRIPTION_TELEGRAM_TOKEN }}
+          PYTHONPATH: scripts/common:scripts/seo
+        run: |
+          ARGS=(--site "${{ matrix.site }}" --config data/seo_sites.json --output report.html --telegram-chat-id "$TELEGRAM_CHAT_ID")
+          if [ -n "$BLOG_COUNT" ]; then ARGS+=(--blog-count "$BLOG_COUNT"); fi
+          python3 scripts/seo/seo_blog_audit.py "${ARGS[@]}"
+
+      - name: Seal report
+        id: pack_1
+        if: always()
+        run: seal-pack --allow-empty "seo-report-${{ matrix.site }}" report.html
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: seo-report-${{ matrix.site }}
+          path: ${{ runner.temp }}/seal/art/seo-report-${{ matrix.site }}/
+          if-no-files-found: warn
+          retention-days: 7
+          compression-level: 0
+
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1
