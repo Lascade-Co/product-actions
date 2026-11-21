@@ -20,20 +20,20 @@ on:
         options: [pt, ist, both]
         default: both
       dry_run:
-        description: Build an encrypted preview without sheet writes or email
+        description: Build a sealed preview without sheet writes or email
         type: boolean
         default: false
       tab:
         description: Sheet tab (YYYY-MM-DD); blank = current day in Asia/Kolkata
         required: false
       report_date:
-        description: Subject report day (YYYY-MM-DD); blank = current day in each edition
+        description: Subject report day (YYYY-MM-DD); blank = latest day past each edition's 05:00 cutoff
         required: false
       test_email_to:
         description: Test recipient override; no sheet writes or delivery marker
         required: false
       recovery:
-        description: Send to real recipients only if no dated Deliver step succeeded
+        description: Send to real recipients only if no dated Deliver step succeeded (main only)
         type: boolean
         default: false
 
@@ -41,13 +41,12 @@ permissions:
   contents: read
   actions: read
 
-# The minute identifies the edition before the gate can resolve its settings.
+# The schedule is IST-only, so the edition is known before settings resolve.
 concurrency:
-  group: digest-chat-summary-${{ github.event_name == 'schedule' && (startsWith(github.event.schedule, '9 ') && 'ist' || 'pt') || inputs.edition || 'both' }}-${{ github.event_name }}
+  group: digest-chat-summary-${{ github.event_name == 'schedule' && 'ist' || inputs.edition || 'both' }}-${{ github.event_name }}
   cancel-in-progress: false
 
 env:
-  RAW: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}
   EVENT: ${{ github.event_name }}
   SCHEDULE: ${{ github.event.schedule }}
   INPUT_EDITION: ${{ inputs.edition || 'both' }}
@@ -55,6 +54,11 @@ env:
   INPUT_DATE: ${{ inputs.report_date }}
   DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
   RECOVERY: ${{ inputs.recovery && 'true' || 'false' }}
+  PYTHONPATH: scripts/common:scripts/ai:scripts/chat_summary
+
+defaults:
+  run:
+    shell: seal-bash {0}
 
 jobs:
   gate:
@@ -69,13 +73,22 @@ jobs:
       edition_matrix: ${{ steps.settings.outputs.edition_matrix }}
       mode: ${{ steps.settings.outputs.mode }}
     steps:
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: |
+            scripts/common/
+            scripts/chat_summary/
+          sparse-checkout-cone-mode: false
+      # Production sends are refused here (off main, re-run, no recovery=true,
+      # future day) before any job that can see a secret.
       - name: Resolve editions
         id: settings
-        run: |
-          for file in editions.py catchup_gate.py; do
-            curl -fsSL --retry 3 --max-time 30 -o "$file" "$RAW/scripts/gate/$file"
-          done
-          python3 editions.py settings
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/chat_summary/cs_editions.py settings
       - name: Wait for the local build window (phase 1)
         id: gate
         env:
@@ -84,8 +97,10 @@ jobs:
           SENT_STEP: ${{ steps.settings.outputs.sent_step }}
           REPORT_DATE: ${{ steps.settings.outputs.report_date }}
         run: |
-          python3 catchup_gate.py --phase 1 --event "$EVENT" --workflow chat-summary.yml \
+          python3 scripts/common/gate.py --phase 1 --event "$EVENT" --workflow chat-summary.yml \
             --sent-step "$SENT_STEP" --tz "$ZONE" --target 05:05 --report-date "$REPORT_DATE"
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1
 
   gate2:
     needs: gate
@@ -98,6 +113,14 @@ jobs:
       edition_matrix: ${{ needs.gate.outputs.edition_matrix }}
       mode: ${{ needs.gate.outputs.mode }}
     steps:
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: |
+            scripts/common/
+          sparse-checkout-cone-mode: false
       - name: Wait for the local build window (phase 2)
         id: gate
         env:
@@ -106,15 +129,17 @@ jobs:
           SENT_STEP: ${{ needs.gate.outputs.sent_step }}
           REPORT_DATE: ${{ needs.gate.outputs.report_date }}
         run: |
-          curl -fsSL --retry 3 --max-time 30 -o catchup_gate.py "$RAW/scripts/gate/catchup_gate.py"
-          python3 catchup_gate.py --phase 2 --event "$EVENT" --workflow chat-summary.yml \
+          python3 scripts/common/gate.py --phase 2 --event "$EVENT" --workflow chat-summary.yml \
             --sent-step "$SENT_STEP" --tz "$ZONE" --target 05:05 --report-date "$REPORT_DATE"
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1
 
   email:
     needs: gate2
     if: needs.gate2.outputs.proceed == 'true'
     name: email (${{ matrix.product }}, ${{ matrix.edition }})
     runs-on: ubuntu-latest
+    environment: production
     timeout-minutes: 75
     strategy:
       fail-fast: false
@@ -128,20 +153,36 @@ jobs:
       EDITION: ${{ matrix.edition }}
       REPORT_DATE: ${{ matrix.report_date }}
     steps:
-      - uses: actions/checkout@v7.0.1
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: |
+            scripts/common/
+            scripts/chat_summary/
+            scripts/fetch-ai.sh
+            .github/actions/fetch-ai/
+            requirements.txt
+          sparse-checkout-cone-mode: false
+      # Masks the test recipient (read from the event payload) before the build
+      # step's env carries it into the public step header.
       - name: Resolve delivery settings and mask test recipients
         id: settings
-        run: python3 scripts/gate/editions.py settings
-      - uses: actions/setup-node@v7.0.0
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/chat_summary/cs_editions.py settings
+      - uses: actions/setup-python@v7
         with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
+          python-version: '3.13'
+      - uses: ./.github/actions/fetch-ai
+      - name: Install dependencies
+        run: pip install --quiet -r requirements.txt
       - name: ${{ inputs.dry_run && steps.settings.outputs.send_step || 'Build the email' }}
         id: build
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
           MAIL_FROM: ${{ secrets.MAIL_FROM }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
           MAIL_TO_PT: ${{ secrets.MAIL_TO_PT }}
@@ -150,43 +191,41 @@ jobs:
           TAB_NAME: ${{ inputs.tab }}
           TAB_DEADLINE: ${{ steps.settings.outputs.tab_deadline }}
           TEST_EMAIL_TO: ${{ inputs.test_email_to }}
-        run: node index.js "$PRODUCT" build
+        run: python3 scripts/chat_summary/cs_main.py "$PRODUCT" build
       - name: Hold until 05:55 local
         id: hold
         if: ${{ github.event_name == 'schedule' }}
         env:
-          HOLD_UNTIL: ${{ steps.settings.outputs.hold_until }}
-        run: node index.js "$PRODUCT" hold
+          ZONE: ${{ steps.settings.outputs.timezone }}
+        run: python3 scripts/common/hold.py --report-date "$REPORT_DATE" --tz "$ZONE" --target 05:55
       - name: Check delivery history inside the send lock
         id: dedupe
         if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/gate/editions.py dedupe
+        run: python3 scripts/chat_summary/cs_editions.py dedupe
+      # Delivery marker: "Deliver <product> <PT|IST> for <YYYY-MM-DD>" (or Test send ...).
       - name: ${{ steps.settings.outputs.send_step }}
         id: send
         if: ${{ !inputs.dry_run && steps.dedupe.outputs.sent != 'true' }}
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-        run: node index.js "$PRODUCT" send
-      - name: Encrypt rendered preview files
-        id: encrypt
+        run: python3 scripts/chat_summary/cs_main.py "$PRODUCT" send
+      # Explicit file names keep out/frozen-* and all other runner data out of the preview.
+      - name: Seal the rendered preview
+        id: pack
         if: ${{ inputs.dry_run }}
-        env:
-          PREVIEW_KEY: ${{ secrets.PREVIEW_KEY }}
-        run: |
-          test -n "$PREVIEW_KEY"
-          # Explicit file names exclude out/frozen-* and all other runner data.
-          tar czf - "out/$PRODUCT-$EDITION.html" "out/$PRODUCT-$EDITION.subject.txt" \
-            | openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:PREVIEW_KEY -out preview.tar.gz.enc
-      - name: Upload encrypted preview
+        run: seal-pack "preview-$PRODUCT-$EDITION" "out/$PRODUCT-$EDITION.html" "out/$PRODUCT-$EDITION.subject.txt"
+      - name: Upload sealed preview
         if: ${{ inputs.dry_run }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: preview-${{ matrix.product }}-${{ matrix.edition }}
-          path: preview.tar.gz.enc
+          path: ${{ runner.temp }}/seal/art/preview-${{ matrix.product }}-${{ matrix.edition }}/
           if-no-files-found: error
           retention-days: 7
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1
 
   done:
     needs: [gate2, email]
@@ -197,8 +236,12 @@ jobs:
     strategy:
       matrix: ${{ fromJSON(needs.gate2.outputs.edition_matrix) }}
     steps:
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
       - name: ${{ format('Delivered {0} for {1}', matrix.label, matrix.report_date) }}
         run: echo "All product deliveries confirmed."
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1
 
   # GitHub disables scheduled workflows in public repos after 60 days without
   # commits. Re-enabling it on every run resets that timer.
@@ -207,7 +250,12 @@ jobs:
     timeout-minutes: 5
     permissions:
       actions: write
+      contents: read
     steps:
-      - run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/chat-summary.yml/enable"
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
+      - run: gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/chat-summary.yml/enable"
         env:
           GH_TOKEN: ${{ github.token }}
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1

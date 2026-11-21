@@ -1,9 +1,10 @@
 /**
  * Travel Animator: SalesIQ chat emails -> date-named tab in the Sheet.
  *
- * This is the ONLY part that runs in Apps Script. Translation, the Gemini
- * summary and the digest email run from the chat-summary repo as a GitHub
- * Action, which picks up the rows this writes.
+ * This is the ONLY part that runs in Apps Script. Translation, the Claude
+ * summary and the digest email run from Lascade-Co/product-actions
+ * (.github/workflows/chat-summary.yml), which picks up the rows this writes.
+ * Reference copy: the live script is edited in the Sheet's Apps Script editor.
  *
  * TRIGGER:
  *   Point your time-driven trigger at extractSalesIQChatsToNewTab.

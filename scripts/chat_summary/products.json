@@ -1,0 +1,14 @@
+{
+  "travel-animator": {
+    "name": "Travel Animator",
+    "sheet_id_env": "TRAVEL_ANIMATOR_SHEET_ID",
+    "support_contact": "connect@travelanimator.com",
+    "sentiment_col": "G"
+  },
+  "marine-radar": {
+    "name": "MarineRadar",
+    "sheet_id_env": "MARINE_RADAR_SHEET_ID",
+    "support_contact": "connect@marineradar.com",
+    "sentiment_col": "H"
+  }
+}
