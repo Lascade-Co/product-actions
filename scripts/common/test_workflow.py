@@ -1,0 +1,441 @@
+"""Workflow settings and delivery-history boundaries; no network or mail."""
+import contextlib
+import datetime as dt
+import io
+import json
+import os
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import workflow
+
+
+def _digest(module, *extra):
+    return {"sender": "Fixture", "recipients": {"pt": ["pt@example.test"], "ist": ["ist@example.test"]},
+            "name": module, "module": module, "extra_args": list(extra)}
+
+
+# Digest settings read data/email_config.json, which holds real recipients and is
+# not part of this package; the tests use a fixture with the same shape.
+CONFIG = {
+    "digests": {
+        "revenue": _digest("revenue_main"),
+        "reviews": _digest("reviews_main", "--apps", "data/reviews_apps.json"),
+        "survey_marine": _digest("survey_main", "--digest", "survey_marine", "--config", "data/survey_marine.json"),
+        "survey_measure": _digest("survey_main", "--digest", "survey_measure", "--config", "data/survey_measure.json"),
+        "conversion": _digest("conversion_main", "--apps", "data/conversion_apps.json"),
+    },
+    "editions": {
+        "pt": {"tz": "America/Los_Angeles", "label": "PT", "delivery": "05:55"},
+        "ist": {"tz": "Asia/Kolkata", "label": "IST", "delivery": "05:55"},
+    },
+}
+
+
+class WorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.w = workflow
+        self.now = dt.datetime(2026, 10, 21, 2, tzinfo=dt.timezone.utc)
+        patcher = patch.object(workflow, "load_config", return_value=CONFIG)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def env(self, **kwargs):
+        return {"EVENT": "workflow_dispatch", "WORKFLOW": "daily-revenue.yml",
+                "INPUT_EDITION": "pt", "DRY_RUN": "true",
+                "GITHUB_REF": "refs/heads/main", "GITHUB_RUN_ATTEMPT": "1",
+                "RUN_CREATED_AT": "2026-10-21T00:00:00Z", **kwargs}
+
+    def test_manual_date_uses_edition_cutoff_and_both_freezes_dates(self):
+        pt = self.w.settings(self.env(), self.now)
+        ist = self.w.settings(self.env(INPUT_EDITION="ist"), self.now)
+        both = self.w.settings(self.env(INPUT_EDITION="both"), self.now)
+        self.assertEqual(pt["report_date"], "2026-10-20")
+        self.assertEqual(ist["report_date"], "2026-10-21")
+        self.assertEqual(json.loads(both["editions"]), [
+            {"edition": "pt", "report_date": "2026-10-20"},
+            {"edition": "ist", "report_date": "2026-10-21"},
+        ])
+        self.assertEqual(both["report_date"], "")
+
+    def test_schedule_is_validated_and_uses_gate_report_day(self):
+        for name, minute in [("revenue", 45), ("reviews", 47),
+                             ("survey", 49), ("conversion", 51)]:
+            settings = self.w.settings(self.env(
+                EVENT="schedule", WORKFLOW=f"daily-{name}.yml",
+                SCHEDULE=f"{minute} 3,6,9 * * *", DRY_RUN="false"), self.now)
+            self.assertEqual(settings["edition"], "pt")
+            self.assertEqual(settings["report_date"], "2026-10-21")
+        with self.assertRaises(ValueError):
+            self.w.settings(self.env(EVENT="schedule", SCHEDULE="0 14 * * *"), self.now)
+
+    def test_dry_and_test_names_do_not_record_production_delivery(self):
+        for overrides, prefix in [({}, "Dry run "),
+                                  ({"DRY_RUN": "false", "TEST_TO": "fixture@example.test"}, "Test send "),
+                                  ({"DRY_RUN": "false", "RECOVERY": "true"}, "Deliver ")]:
+            value = self.w.settings(self.env(DIGEST="revenue", REPORT_DATE="2026-10-20", **overrides), self.now)
+            self.assertEqual(value["send_step"], prefix + "revenue PT for 2026-10-20")
+        with self.assertRaises(ValueError):
+            self.w.settings(self.env(DRY_RUN="false"), self.now)
+
+    def test_digest_args_build_the_requested_survey_product_without_recipients(self):
+        value = self.w.settings(self.env(WORKFLOW="daily-survey.yml", DIGEST="survey_measure"), self.now)
+        argv = self.w.digest_args("survey_measure", value)
+        self.assertEqual(argv[:2], ["-m", "survey_main"])
+        self.assertIn("data/survey_measure.json", argv)
+        self.assertIn("--dry-run", argv)
+        self.assertEqual(argv[argv.index("--edition") + 1], "pt")
+        self.assertNotIn("@", " ".join(argv))
+
+    def test_dedupe_checks_per_digest_and_fails_closed(self):
+        value = self.w.settings(self.env(DRY_RUN="false", RECOVERY="true", DIGEST="revenue",
+                                         REPORT_DATE="2026-10-20"), self.now)
+        with patch.object(self.w.G, "already_sent", return_value=True) as history:
+            self.assertTrue(self.w.digest_dedupe(value, "revenue"))
+        self.assertEqual(history.call_args.kwargs["sent_step"], "Deliver revenue PT for ")
+        self.assertEqual(history.call_args.kwargs["workflow"], "daily-revenue.yml")
+        with patch.object(self.w.G, "already_sent", side_effect=self.w.G.DedupeUnavailable()):
+            with self.assertRaises(self.w.G.DedupeUnavailable):
+                self.w.digest_dedupe(value, "revenue")
+
+    def test_dry_or_test_does_not_query_history(self):
+        for overrides in [{}, {"DRY_RUN": "false", "TEST_TO": "fixture@example.test"}]:
+            value = self.w.settings(self.env(DIGEST="revenue", REPORT_DATE="2026-10-20", **overrides), self.now)
+            with patch.object(self.w.G, "already_sent", side_effect=AssertionError("network")):
+                self.assertFalse(self.w.digest_dedupe(value, "revenue"))
+
+    def test_settings_never_emit_test_recipient(self):
+        recipient = "private-fixture@example.test"
+        env = self.env(DIGEST="revenue", DRY_RUN="false", TEST_TO=recipient,
+                       REPORT_DATE="2026-10-20", NOW="2026-10-21T02:00:00Z")
+        output = io.StringIO()
+        with patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(output):
+            self.assertEqual(self.w.main(["settings"]), 0)
+        self.assertNotIn(recipient, output.getvalue())
+
+    def test_workflow_test_mode_needs_no_recipient_environment_value(self):
+        value = self.w.settings(self.env(DIGEST="revenue", DRY_RUN="false", TEST_MODE="true",
+                                         REPORT_DATE="2026-10-20"), self.now)
+        self.assertEqual(value["mode"], "test")
+        self.assertEqual(value["send_step"], "Test send revenue PT for 2026-10-20")
+
+    def test_production_recovery_rejects_non_main_and_unknown_refs(self):
+        for ref in ("refs/heads/codex/digest-emails/b", "refs/tags/main", ""):
+            with self.subTest(ref=ref), self.assertRaises(ValueError):
+                self.w.settings(self.env(DRY_RUN="false", RECOVERY="true", GITHUB_REF=ref), self.now)
+
+    def test_branch_previews_and_test_sends_remain_allowed(self):
+        branch = "refs/heads/codex/digest-emails/b"
+        for overrides, mode in [({"DRY_RUN": "true"}, "dry"),
+                                ({"DRY_RUN": "false", "TEST_MODE": "true"}, "test")]:
+            with self.subTest(mode=mode):
+                value = self.w.settings(self.env(GITHUB_REF=branch, RECOVERY="true", **overrides), self.now)
+                self.assertEqual(value["mode"], mode)
+
+    def test_production_recovery_before_cutoff_rejects_today_and_tomorrow(self):
+        for edition, instant in (("pt", "2026-10-21T11:59:59+00:00"),
+                                 ("ist", "2026-10-20T23:29:59+00:00")):
+            now = dt.datetime.fromisoformat(instant)
+            for key, overrides in (("INPUT_DATE", {}), ("REPORT_DATE", {"DIGEST": "revenue"})):
+                env = self.env(INPUT_EDITION=edition, DRY_RUN="false", RECOVERY="true", **overrides)
+                with self.subTest(edition=edition, key=key, date="2026-10-20"):
+                    value = self.w.settings({**env, key: "2026-10-20"}, now)
+                    self.assertEqual(value["report_date"], "2026-10-20")
+                for date in ("2026-10-21", "2026-10-22"):
+                    with self.subTest(edition=edition, key=key, date=date), self.assertRaisesRegex(
+                            self.w.SettingsError, "^production recovery cannot target a future report day$"):
+                        self.w.settings({**env, key: date}, now)
+
+    def test_production_recovery_from_cutoff_allows_today_but_rejects_tomorrow(self):
+        for edition, instant in (("pt", "2026-10-21T12:00:00+00:00"),
+                                 ("ist", "2026-10-20T23:30:00+00:00")):
+            cutoff = dt.datetime.fromisoformat(instant)
+            for now in (cutoff, cutoff + dt.timedelta(hours=1)):
+                for key, overrides in (("INPUT_DATE", {}), ("REPORT_DATE", {"DIGEST": "revenue"})):
+                    env = self.env(INPUT_EDITION=edition, DRY_RUN="false", RECOVERY="true", **overrides)
+                    with self.subTest(edition=edition, now=now, key=key):
+                        value = self.w.settings({**env, key: "2026-10-21"}, now)
+                        self.assertEqual(value["report_date"], "2026-10-21")
+                        with self.assertRaisesRegex(self.w.SettingsError,
+                                "^production recovery cannot target a future report day$"):
+                            self.w.settings({**env, key: "2026-10-22"}, now)
+
+    def test_production_recovery_both_checks_each_edition_cutoff(self):
+        env = self.env(INPUT_EDITION="both", DRY_RUN="false", RECOVERY="true")
+        resolved = self.w.settings(env, self.now)
+        self.assertEqual(json.loads(resolved["editions"]), [
+            {"edition": "pt", "report_date": "2026-10-20"},
+            {"edition": "ist", "report_date": "2026-10-21"},
+        ])
+        shared = self.w.settings({**env, "INPUT_DATE": "2026-10-20"}, self.now)
+        self.assertEqual(json.loads(shared["editions"]), [
+            {"edition": "pt", "report_date": "2026-10-20"},
+            {"edition": "ist", "report_date": "2026-10-20"},
+        ])
+        ist = self.w.settings({**env, "INPUT_EDITION": "ist", "INPUT_DATE": "2026-10-21"}, self.now)
+        self.assertEqual(ist["report_date"], "2026-10-21")
+        with self.assertRaisesRegex(self.w.SettingsError,
+                "^production recovery cannot target a future report day$"):
+            self.w.settings({**env, "INPUT_DATE": "2026-10-21"}, self.now)
+
+    def test_future_report_days_remain_allowed_for_branch_previews_and_test_sends(self):
+        for mode in ({"DRY_RUN": "true"}, {"DRY_RUN": "false", "TEST_MODE": "true"}):
+            for edition, overrides in (("both", {"INPUT_DATE": "2026-10-22"}),
+                                       ("pt", {"DIGEST": "revenue", "REPORT_DATE": "2026-10-22"}),
+                                       ("ist", {"DIGEST": "revenue", "REPORT_DATE": "2026-10-22"})):
+                with self.subTest(mode=mode, edition=edition):
+                    value = self.w.settings(self.env(INPUT_EDITION=edition,
+                        GITHUB_REF="refs/heads/codex/digest-emails/b", **mode, **overrides), self.now)
+                    self.assertEqual(value["report_date"], "2026-10-22")
+
+    def test_future_recovery_cli_reports_exact_error_without_outputs(self):
+        env = self.env(DRY_RUN="false", RECOVERY="true", INPUT_DATE="2026-10-22",
+                       NOW="2026-10-21T02:00:00Z")
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(output), \
+                contextlib.redirect_stderr(errors):
+            self.assertEqual(self.w.main(["settings"]), 2)
+        self.assertEqual(output.getvalue(), "")
+        self.assertEqual(errors.getvalue().strip(), "production recovery cannot target a future report day")
+
+    def test_production_requires_a_fresh_run_attempt(self):
+        for attempt in ("2", "99", "", "01"):
+            with self.subTest(attempt=attempt), self.assertRaisesRegex(
+                    ValueError, "production delivery requires a fresh run; re-runs are not allowed, dispatch recovery instead"):
+                self.w.settings(self.env(DRY_RUN="false", RECOVERY="true",
+                    GITHUB_RUN_ATTEMPT=attempt), self.now)
+
+    def test_dry_and_test_reruns_remain_allowed(self):
+        for mode in ({"DRY_RUN": "true"}, {"DRY_RUN": "false", "TEST_MODE": "true"}):
+            value = self.w.settings(self.env(GITHUB_RUN_ATTEMPT="2", DIGEST="revenue",
+                REPORT_DATE="2026-10-20", **mode), self.now)
+            self.assertIn(value["mode"], ("dry", "test"))
+
+    def test_rejected_rerun_cli_explains_how_to_recover(self):
+        env = self.env(DRY_RUN="false", RECOVERY="true", GITHUB_RUN_ATTEMPT="2",
+                       NOW="2026-10-21T02:00:00Z")
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(output), \
+                contextlib.redirect_stderr(errors):
+            self.assertEqual(self.w.main(["settings"]), 2)
+        self.assertEqual(output.getvalue(), "")
+        self.assertEqual(errors.getvalue().strip(),
+                         "production delivery requires a fresh run; re-runs are not allowed, dispatch recovery instead")
+
+    def test_scheduled_run_rejects_creation_older_than_36_hours(self):
+        for age, allowed in ((dt.timedelta(hours=36), True),
+                             (dt.timedelta(hours=36, seconds=1), False)):
+            env = self.env(EVENT="schedule", SCHEDULE="45 3,6,9 * * *", DRY_RUN="false",
+                           RUN_CREATED_AT=(self.now - age).isoformat())
+            with self.subTest(age=age):
+                if allowed:
+                    self.assertEqual(self.w.settings(env, self.now)["mode"], "real")
+                else:
+                    with self.assertRaisesRegex(ValueError, "run is older than 36 hours"):
+                        self.w.settings(env, self.now)
+
+    def test_scheduled_creation_time_uses_own_run_api_not_repository_creation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            event = Path(directory) / "event.json"
+            event.write_text(json.dumps({"schedule": "45 3,6,9 * * *",
+                                        "repository": {"created_at": "2000-01-01T00:00:00Z"}}))
+            env = self.env(EVENT="schedule", SCHEDULE="45 3,6,9 * * *", DRY_RUN="false",
+                           RUN_CREATED_AT="", GITHUB_EVENT_PATH=str(event),
+                           GITHUB_REPOSITORY="Lascade-Co/daily-email-digest-actions", GITHUB_RUN_ID="123")
+            for created, allowed in (("2026-10-21T00:00:00Z", True), ("2026-10-01T00:00:00Z", False)):
+                with self.subTest(created=created), patch.object(self.w.G, "gh_json",
+                        return_value={"id": 123, "created_at": created}) as fetch:
+                    if allowed:
+                        self.w.settings(env, self.now)
+                    else:
+                        with self.assertRaisesRegex(ValueError, "older than 36 hours"):
+                            self.w.settings(env, self.now)
+                    fetch.assert_called_once_with("repos/Lascade-Co/daily-email-digest-actions/actions/runs/123")
+
+    def test_scheduled_creation_time_accepts_own_event_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            event = Path(directory) / "event.json"
+            event.write_text(json.dumps({"workflow_run": {"id": 123, "created_at": "2026-10-21T00:00:00Z"}}))
+            env = self.env(EVENT="schedule", SCHEDULE="45 3,6,9 * * *", DRY_RUN="false",
+                           RUN_CREATED_AT="", GITHUB_EVENT_PATH=str(event), GITHUB_RUN_ID="123")
+            with patch.object(self.w.G, "gh_json", side_effect=AssertionError("unexpected API call")):
+                self.assertEqual(self.w.settings(env, self.now)["mode"], "real")
+
+    def test_unavailable_or_invalid_run_creation_time_fails_closed(self):
+        for timestamp in ("bad", "2026-10-21T00:00:00", ""):
+            with self.subTest(timestamp=timestamp), patch.object(self.w.G, "gh_json", side_effect=OSError("private data")):
+                with self.assertRaisesRegex(ValueError, "run creation time unavailable"):
+                    self.w.settings(self.env(EVENT="schedule", SCHEDULE="45 3,6,9 * * *", DRY_RUN="false",
+                        RUN_CREATED_AT=timestamp, GITHUB_REPOSITORY="Lascade-Co/daily-email-digest-actions",
+                        GITHUB_RUN_ID="123"), self.now)
+
+    def test_reusable_real_and_test_settings_require_frozen_report_date(self):
+        for mode in ({"RECOVERY": "true"}, {"TEST_MODE": "true"}):
+            with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, "REPORT_DATE is required"):
+                self.w.settings(self.env(DIGEST="revenue", DRY_RUN="false", INPUT_DATE="2026-10-20", **mode), self.now)
+        self.assertEqual(self.w.settings(self.env(DIGEST="revenue"), self.now)["report_date"], "2026-10-20")
+
+    def test_explicit_dispatch_date_is_frozen_for_both_editions(self):
+        value = self.w.settings(self.env(INPUT_EDITION="both", INPUT_DATE="2026-10-18"), self.now)
+        self.assertEqual(json.loads(value["editions"]), [
+            {"edition": "pt", "report_date": "2026-10-18"},
+            {"edition": "ist", "report_date": "2026-10-18"},
+        ])
+
+    def test_matrix_legs_keep_each_edition_date_across_cutoff(self):
+        for instant, expected in [
+            ("2026-10-20T23:29:59+00:00", ["2026-10-20", "2026-10-20"]),
+            ("2026-10-21T11:59:59+00:00", ["2026-10-20", "2026-10-21"]),
+        ]:
+            with self.subTest(instant=instant):
+                before = dt.datetime.fromisoformat(instant)
+                gate_env = self.env(WORKFLOW="daily-survey.yml", INPUT_EDITION="both",
+                                    DRY_RUN="false", TEST_MODE="true")
+                gate = self.w.settings(gate_env, before)
+                matrix = json.loads(gate["editions"])
+                self.assertEqual(matrix, [dict(edition=e, report_date=d) for e, d in zip(("pt", "ist"), expected)])
+                for entry in matrix:
+                    for index, digest in enumerate(("survey_marine", "survey_measure")):
+                        leg = self.w.settings({**gate_env, "INPUT_EDITION": entry["edition"],
+                            "REPORT_DATE": entry["report_date"], "DIGEST": digest},
+                            before + dt.timedelta(minutes=index, seconds=2))
+                        self.assertEqual(leg["report_date"], entry["report_date"])
+                        self.assertEqual(leg["send_step"], f"Test send {digest} {entry['edition'].upper()} for {entry['report_date']}")
+
+
+REAL = {"EVENT": "workflow_dispatch", "RECOVERY": "true", "GITHUB_REF": "refs/heads/main",
+        "GITHUB_RUN_ATTEMPT": "1", "RUN_CREATED_AT": "2026-10-21T00:00:00Z"}
+NOW = dt.datetime(2026, 10, 21, 13, tzinfo=dt.timezone.utc)
+DAY = dt.date(2026, 10, 21)
+
+
+class RunModeTests(unittest.TestCase):
+    def test_real_send_requires_main(self):
+        self.assertEqual(workflow.run_mode("workflow_dispatch", True, "", False), "real")
+        with self.assertRaises(workflow.SettingsError):
+            workflow.guard_real_run({**REAL, "GITHUB_REF": "refs/heads/x"}, DAY, DAY, NOW)
+        workflow.guard_real_run(REAL, DAY, DAY, NOW)
+
+    def test_modes(self):
+        self.assertEqual(workflow.run_mode("schedule", False, "", False), "real")
+        self.assertEqual(workflow.run_mode("workflow_dispatch", False, "", True), "dry")
+        self.assertEqual(workflow.run_mode("workflow_dispatch", "false", "", "true"), "dry")
+        self.assertEqual(workflow.run_mode("workflow_dispatch", True, "a@example.test", False), "test")
+        self.assertEqual(workflow.run_mode("workflow_dispatch", "true", "", "false"), "real")
+
+    def test_dry_run_wins_over_test_recipient(self):
+        self.assertEqual(workflow.run_mode("workflow_dispatch", False, "a@example.test", True), "dry")
+
+    def test_manual_real_without_recovery_is_refused(self):
+        for recovery in (False, "false", "", None):
+            with self.subTest(recovery=recovery), self.assertRaises(workflow.SettingsError):
+                workflow.run_mode("workflow_dispatch", recovery, "", False)
+
+    def test_blank_test_recipient_is_refused(self):
+        with self.assertRaises(workflow.SettingsError):
+            workflow.run_mode("workflow_dispatch", False, "  ", False)
+
+
+class GuardRealRunTests(unittest.TestCase):
+    def refused(self, env, report_date=DAY, latest=DAY, now=NOW):
+        with patch.object(workflow.G, "gh_json", side_effect=AssertionError("network")):
+            with self.assertRaises(workflow.SettingsError) as caught:
+                workflow.guard_real_run(env, report_date, latest, now)
+        return str(caught.exception)
+
+    def test_rerun_attempts_are_refused(self):
+        for attempt in ("2", "", "01", None):
+            env = {k: v for k, v in {**REAL, "GITHUB_RUN_ATTEMPT": attempt}.items() if v is not None}
+            with self.subTest(attempt=attempt):
+                self.assertIn("fresh run", self.refused(env))
+
+    def test_manual_without_recovery_is_refused(self):
+        for event in ("workflow_dispatch", "repository_dispatch", ""):
+            with self.subTest(event=event):
+                self.assertIn("recovery=true", self.refused({**REAL, "EVENT": event, "RECOVERY": "false"}))
+
+    def test_manual_off_main_is_refused_before_any_lookup(self):
+        for ref in ("refs/heads/x", "refs/tags/main", ""):
+            with self.subTest(ref=ref):
+                env = {**REAL, "GITHUB_REF": ref, "RUN_CREATED_AT": ""}
+                self.assertIn("main", self.refused(env))
+
+    def test_event_name_falls_back_to_github_event_name(self):
+        env = {k: v for k, v in REAL.items() if k != "EVENT"}
+        workflow.guard_real_run({**env, "GITHUB_EVENT_NAME": "workflow_dispatch"}, DAY, DAY, NOW)
+        self.refused({**env, "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REF": "refs/heads/x"})
+
+    def test_future_day_is_refused_for_manual_runs(self):
+        self.assertIn("future report day", self.refused(REAL, DAY + dt.timedelta(days=1), DAY))
+
+    def test_schedule_may_target_the_upcoming_day(self):
+        env = {"EVENT": "schedule", "GITHUB_RUN_ATTEMPT": "1", "RUN_CREATED_AT": "2026-10-21T00:00:00Z"}
+        workflow.guard_real_run(env, DAY + dt.timedelta(days=1), DAY, NOW)
+
+    def test_runs_created_more_than_36_hours_ago_are_refused(self):
+        for event in ("schedule", "workflow_dispatch"):
+            env = {**REAL, "EVENT": event}
+            with self.subTest(event=event):
+                workflow.guard_real_run({**env, "RUN_CREATED_AT": "2026-10-20T01:00:00Z"}, DAY, DAY, NOW)
+                self.assertIn("older than 36 hours",
+                              self.refused({**env, "RUN_CREATED_AT": "2026-10-20T00:59:59Z"}))
+
+    def test_unknown_creation_time_fails_closed(self):
+        env = {**REAL, "RUN_CREATED_AT": "", "GITHUB_REPOSITORY": "Lascade-Co/product-actions",
+               "GITHUB_RUN_ID": "7"}
+        with patch.object(workflow.G, "gh_json", side_effect=OSError("private")):
+            with self.assertRaisesRegex(workflow.SettingsError, "^run creation time unavailable$"):
+                workflow.guard_real_run(env, DAY, DAY, NOW)
+
+
+class StepNameTests(unittest.TestCase):
+    def test_names(self):
+        self.assertEqual(workflow.step_name("install paid", "PT", DAY, "real"), "Deliver install paid PT for 2026-10-21")
+        self.assertEqual(workflow.step_name("install paid", "IST", "2026-10-21", "test"),
+                         "Test send install paid IST for 2026-10-21")
+        self.assertEqual(workflow.step_name("catchup", "", DAY, "dry"), "Dry run catchup for 2026-10-21")
+        self.assertEqual(workflow.step_name("ad spend A", None, DAY, "real"), "Deliver ad spend A for 2026-10-21")
+
+    def test_sent_prefix_matches_real_name(self):
+        self.assertEqual(workflow.sent_prefix("hunch retention", ""), "Deliver hunch retention for ")
+        self.assertEqual(workflow.sent_prefix("install paid", "PT") + "2026-10-21",
+                         workflow.step_name("install paid", "PT", DAY, "real"))
+
+    def test_unknown_mode_is_rejected(self):
+        with self.assertRaises(ValueError):
+            workflow.step_name("catchup", "", DAY, "forced")
+
+
+class DedupeTests(unittest.TestCase):
+    def test_schedule_checks_exact_marker(self):
+        with patch.object(workflow.G, "already_sent", return_value=True) as history:
+            self.assertTrue(workflow.dedupe("daily-catchup.yml", "Deliver catchup for ", "2026-10-21", "schedule"))
+        self.assertEqual(history.call_args.args[0], DAY)
+        self.assertEqual(history.call_args.kwargs["workflow"], "daily-catchup.yml")
+        self.assertEqual(history.call_args.kwargs["sent_step"], "Deliver catchup for ")
+
+    def test_manual_skips_history(self):
+        with patch.object(workflow.G, "already_sent", side_effect=AssertionError("network")):
+            self.assertFalse(workflow.dedupe("daily-catchup.yml", "Deliver catchup for ", DAY, "workflow_dispatch"))
+
+    def test_schedule_fails_open_on_unavailable_history(self):
+        errors = io.StringIO()
+        with patch.object(workflow.G, "already_sent", side_effect=workflow.G.DedupeUnavailable()), \
+                contextlib.redirect_stderr(errors):
+            self.assertFalse(workflow.dedupe("daily-catchup.yml", "Deliver catchup for ", DAY, "schedule"))
+        self.assertEqual(errors.getvalue(), "delivery history unavailable; proceeding on scheduled key\n")
+
+    def test_other_events_fail_closed_on_unavailable_history(self):
+        with patch.object(workflow.G, "already_sent", side_effect=workflow.G.DedupeUnavailable()):
+            with self.assertRaises(workflow.G.DedupeUnavailable):
+                workflow.dedupe("daily-catchup.yml", "Deliver catchup for ", DAY, "repository_dispatch")
+
+    def test_blank_marker_is_a_configuration_error(self):
+        with self.assertRaises(ValueError):
+            workflow.dedupe("daily-catchup.yml", "", DAY, "schedule")
+
+
+if __name__ == "__main__":
+    unittest.main()
