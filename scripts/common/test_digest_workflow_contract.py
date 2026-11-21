@@ -1,11 +1,5 @@
 """Workflow lint for the delivery guarantees that execute on GitHub runners."""
-import io
-import os
 from pathlib import Path
-import shutil
-import subprocess
-import tarfile
-import tempfile
 import unittest
 
 import yaml
@@ -35,14 +29,16 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertLess(build, hold)
         self.assertEqual(hold + 1, dedupe)
         self.assertEqual(steps[hold]["if"], "${{ github.event_name == 'schedule' }}")
-        self.assertIn("delivery.py", steps[-1]["run"])
-        send_env = steps[-1]["env"]
+        self.assertEqual(steps[-1]["uses"], "Lascade-Co/actions/actions/seal-upload@seal-v1")
+        send = steps[-2]
+        self.assertIn("delivery.py", send["run"])
+        send_env = send["env"]
         self.assertIn("RESEND_API_KEY", send_env)
         self.assertIn("MAIL_FROM", send_env)
         self.assertNotIn("GMAIL_USER", send_env)
         self.assertNotIn("GMAIL_APP_PASSWORD", send_env)
-        self.assertEqual(steps[-1]["name"], "${{ steps.settings.outputs.send_step }}")
-        self.assertEqual(steps[-1]["if"], "${{ !inputs.dry_run }}")
+        self.assertEqual(send["name"], "${{ steps.settings.outputs.send_step }}")
+        self.assertEqual(send["if"], "${{ !inputs.dry_run }}")
 
     def test_partial_matrix_dry_and_test_cannot_emit_aggregate_delivery_marker(self):
         done = self.reusable["jobs"]["done"]
@@ -55,7 +51,7 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_aggregate_delivery_marker_uses_the_callers_frozen_report_day(self):
         done = self.reusable["jobs"]["done"]
-        self.assertEqual(done["steps"][0]["name"],
+        self.assertEqual(done["steps"][1]["name"],
                          "Delivered ${{ inputs.edition == 'pt' && 'PT' || 'IST' }} for ${{ inputs.report_date }}")
         self.assertNotIn("report_date", self.email.get("outputs", {}))
         self.assertEqual(self.reusable["env"]["REPORT_DATE"], "${{ inputs.report_date }}")
@@ -78,7 +74,7 @@ class WorkflowContractTests(unittest.TestCase):
                                  "${{ needs.gate.outputs.editions }}")
                 self.assertEqual(job["secrets"], "inherit")
                 self.assertEqual(set(caller["jobs"]), {"gate", "gate2", "email"})
-        checkout = next(s for s in self.email["steps"] if s.get("uses", "").startswith("actions/checkout@"))
+        checkout = next(s for s in self.email["steps"] if s.get("uses", "").startswith("actions/checkout@v7"))
         self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
 
     def test_settings_can_query_the_current_runs_creation_time(self):
@@ -99,42 +95,50 @@ class WorkflowContractTests(unittest.TestCase):
                 first = next(step for step in jobs["gate"]["steps"] if step.get("id") == "timing")
                 self.assertEqual(first["env"].get("REPORT_DATE"), "${{ steps.settings.outputs.report_date }}")
                 self.assertIn('--report-date "$REPORT_DATE"', first["run"])
-                second = jobs["gate2"]["steps"][0]
+                second = next(step for step in jobs["gate2"]["steps"] if step.get("id") == "timing")
                 self.assertEqual(second["env"]["REPORT_DATE"], "${{ needs.gate.outputs.report_date }}")
                 self.assertIn('--report-date "$REPORT_DATE"', second["run"])
 
-    def test_public_artifact_is_only_encrypted_archive(self):
-        uploads = [s for s in self.email["steps"] if s.get("uses", "").startswith("actions/upload-artifact@")]
+    def test_digest_preview_is_sealed_pack(self):
+        text = (ROOT / ".github/workflows/_digest.yml").read_text()
+        self.assertNotIn("openssl", text)
+        self.assertNotIn("PREVIEW_KEY", text)
+        steps = self.email["steps"]
+        uploads = [i for i, s in enumerate(steps) if s.get("uses", "").startswith("actions/upload-artifact@")
+                   and "seal/out" not in s["with"]["path"]]
         self.assertEqual(len(uploads), 1)
-        self.assertEqual(uploads[0]["if"], "${{ inputs.dry_run }}")
-        self.assertEqual(uploads[0]["with"]["path"], "preview.tar.gz.enc")
-        self.assertEqual(uploads[0]["with"]["name"], "preview-${{ matrix.digest }}-${{ inputs.edition }}")
+        upload = steps[uploads[0]]
+        self.assertEqual(upload["if"], "${{ inputs.dry_run }}")
+        self.assertEqual(upload["with"]["path"],
+                         "${{ runner.temp }}/seal/art/preview-${{ matrix.digest }}-${{ inputs.edition }}/")
+        self.assertEqual(upload["with"]["name"], "preview-${{ matrix.digest }}-${{ inputs.edition }}")
+        self.assertLessEqual(int(upload["with"]["retention-days"]), 7)
+        pack = steps[uploads[0] - 1]
+        self.assertEqual(pack["if"], "${{ inputs.dry_run }}")
+        self.assertIn("seal-pack preview-${{ matrix.digest }}-${{ inputs.edition }} out", pack["run"])
 
-    @unittest.skipUnless(shutil.which("openssl"), "openssl is required for preview encryption")
-    def test_encryption_step_round_trips_only_preview_files(self):
-        encrypt = next(s for s in self.email["steps"] if s.get("name") == "Encrypt preview")
-        scratch = ROOT / ".scratch"
-        scratch.mkdir(exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=scratch) as directory:
-            base = Path(directory)
-            (base / "out").mkdir()
-            (base / "out/revenue-pt.html").write_text("<html>Private fixture</html>")
-            (base / "out/revenue-pt.subject.txt").write_text("Private fixture subject")
-            # GitHub uses GNU tar on Ubuntu; macOS otherwise adds AppleDouble
-            # resource forks unrelated to the preview file contract.
-            env = {**os.environ, "PREVIEW_KEY": "offline-fixture-key", "COPYFILE_DISABLE": "1"}
-            result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", encrypt["run"]],
-                                    cwd=base, env=env, capture_output=True)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertNotIn(b"Private fixture", result.stdout + result.stderr)
-            archive = (base / "preview.tar.gz.enc").read_bytes()
-            self.assertNotIn(b"Private fixture", archive)
-            plain = subprocess.run(["openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2",
-                                    "-pass", "env:PREVIEW_KEY"], input=archive, env=env, capture_output=True)
-            self.assertEqual(plain.returncode, 0, plain.stderr)
-            with tarfile.open(fileobj=io.BytesIO(plain.stdout), mode="r:gz") as tar:
-                files = sorted(m.name for m in tar.getmembers() if m.isfile())
-            self.assertEqual(files, ["out/revenue-pt.html", "out/revenue-pt.subject.txt"])
+    def test_every_job_is_sealed_first_and_last_with_the_sealed_shell(self):
+        names = ["_digest.yml", "daily-incomplete-checkout.yml", "live-translation-check.yml",
+                 "ta-digest-trigger.yml"] + [f"daily-{n}.yml" for n in
+                 ("revenue", "reviews", "survey", "conversion", "container-credits")]
+        for name in names:
+            document = workflow(name)
+            self.assertEqual(document["defaults"]["run"]["shell"], "seal-bash-e {0}")
+            for job_id, job in document["jobs"].items():
+                if "steps" not in job:
+                    continue
+                with self.subTest(workflow=name, job=job_id):
+                    self.assertEqual(job["steps"][0]["uses"], "Lascade-Co/actions/actions/seal@seal-v1")
+                    self.assertEqual(job["steps"][-1]["uses"], "Lascade-Co/actions/actions/seal-upload@seal-v1")
+                    self.assertEqual(job["steps"][-1]["if"], "always()")
+
+    def test_digest_job_has_production_environment(self):
+        self.assertEqual(self.email["environment"], "production")
+        for name in ("daily-revenue.yml", "daily-reviews.yml", "daily-survey.yml", "daily-conversion.yml",
+                     "daily-container-credits.yml"):
+            with self.subTest(name=name):
+                self.assertNotIn("environment", workflow(name)["jobs"]["email"])
+                self.assertEqual(workflow(name)["jobs"]["email"]["secrets"], "inherit")
 
     def test_recipient_input_is_not_exposed_in_actions_environment_headers(self):
         for name in ["_digest.yml", "daily-revenue.yml", "daily-reviews.yml", "daily-survey.yml", "daily-conversion.yml"]:

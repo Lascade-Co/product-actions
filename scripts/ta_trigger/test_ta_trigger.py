@@ -271,7 +271,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_mask_steps_read_the_event_file_not_env(self):
         for job in ("gate", "deliver"):
-            first = self.wf["jobs"][job]["steps"][0]
+            first = self.wf["jobs"][job]["steps"][1]
             self.assertEqual(first["name"], "Mask test recipient")
             self.assertNotIn("env", first)
             self.assertIn("GITHUB_EVENT_PATH", first["run"])

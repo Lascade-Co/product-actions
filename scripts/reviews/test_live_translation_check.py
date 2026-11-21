@@ -119,11 +119,12 @@ class LiveWorkflowTests(unittest.TestCase):
         self.assertNotIn("uses", job)
         checkout = next(step for step in job["steps"] if "actions/checkout@" in step.get("uses", ""))
         self.assertNotIn("sparse-checkout", checkout.get("with", {}))
-        check = next(step for step in job["steps"] if step.get("run") == "python3 tests/live_translation_check.py")
+        check = next(step for step in job["steps"] if step.get("run") == "python3 scripts/reviews/live_translation_check.py")
         self.assertEqual(check["env"], {"GOOGLE_API_KEY": "${{ secrets.GOOGLE_API_KEY }}",
                                        "GOOGLE_SA_KEY": "${{ secrets.GOOGLE_SA_KEY }}"})
         self.assertNotIn("env", workflow)
-        self.assertNotIn("env", job)
+        self.assertEqual(job["env"], {"PYTHONPATH": "scripts/common:scripts/reviews:scripts/survey"})
+        self.assertEqual(job["environment"], "production")
         for step in job["steps"]:
             self.assertNotIn("settings", step.get("run", ""))
             self.assertNotIn("delivery", step.get("run", ""))

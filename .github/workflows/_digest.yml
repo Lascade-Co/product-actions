@@ -29,6 +29,10 @@ permissions:
   contents: read
   actions: read
 
+defaults:
+  run:
+    shell: "seal-bash-e {0}"
+
 env:
   GH_TOKEN: ${{ github.token }}
   EVENT: ${{ github.event_name }}
@@ -39,10 +43,12 @@ env:
   DRY_RUN: ${{ inputs.dry_run }}
   RECOVERY: ${{ inputs.recovery }}
   TEST_MODE: ${{ inputs.to != '' }}
+  PYTHONPATH: scripts/common:scripts/container_credits:scripts/conversion:scripts/incomplete_checkout:scripts/revenue:scripts/reviews:scripts/survey
 
 jobs:
   email:
     runs-on: ubuntu-latest
+    environment: production
     timeout-minutes: 75
     strategy:
       fail-fast: false
@@ -55,9 +61,12 @@ jobs:
     env:
       DIGEST: ${{ matrix.digest }}
     steps:
-      - uses: actions/checkout@v6
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
+          persist-credentials: false
           sparse-checkout: |
             scripts
             data
@@ -104,23 +113,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPORT_DATE: ${{ steps.settings.outputs.report_date }}
         run: python3 scripts/common/workflow.py dedupe
-      - name: Encrypt preview
+      - name: Pack sealed preview
         if: ${{ inputs.dry_run }}
-        env:
-          PREVIEW_KEY: ${{ secrets.PREVIEW_KEY }}
-        run: |
-          test -n "$PREVIEW_KEY" || { echo "PREVIEW_KEY is required" >&2; exit 1; }
-          tar czf - out | openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:PREVIEW_KEY -out preview.tar.gz.enc
+        run: seal-pack preview-${{ matrix.digest }}-${{ inputs.edition }} out
       - name: ${{ inputs.dry_run && steps.settings.outputs.send_step || 'Preview upload (disabled)' }}
         if: ${{ inputs.dry_run }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: preview-${{ matrix.digest }}-${{ inputs.edition }}
-          path: preview.tar.gz.enc
+          path: ${{ runner.temp }}/seal/art/preview-${{ matrix.digest }}-${{ inputs.edition }}/
           if-no-files-found: error
           retention-days: 3
-      # Keep this last: production success records Resend acceptance or a verified
-      # prior acceptance. No post-send step can hide a successful delivery.
+      # Keep this the last real step (only the sealed-log upload follows): production
+      # success records Resend acceptance or a verified prior acceptance.
       - name: ${{ steps.settings.outputs.send_step }}
         if: ${{ !inputs.dry_run }}
         env:
@@ -143,6 +148,8 @@ jobs:
               --subject-file "out/$DIGEST-$EDITION.subject.txt" --html-file "out/$DIGEST-$EDITION.html" \
               --report-date "$REPORT_DATE" "${FLAGS[@]}"
           fi
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1
 
   done:
     needs: email
@@ -150,5 +157,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
       - name: Delivered ${{ inputs.edition == 'pt' && 'PT' || 'IST' }} for ${{ inputs.report_date }}
         run: echo "All digest deliveries verified"
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1

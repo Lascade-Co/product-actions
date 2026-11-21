@@ -6,12 +6,21 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: "seal-bash-e {0}"
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    environment: production
     timeout-minutes: 10
+    env:
+      PYTHONPATH: scripts/common:scripts/reviews:scripts/survey
     steps:
-      - uses: actions/checkout@v6
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -24,4 +33,6 @@ jobs:
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GOOGLE_SA_KEY: ${{ secrets.GOOGLE_SA_KEY }}
-        run: python3 tests/live_translation_check.py
+        run: python3 scripts/reviews/live_translation_check.py
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1

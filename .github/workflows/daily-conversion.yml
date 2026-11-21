@@ -12,7 +12,7 @@ on:
         options: [both, pt, ist]
         default: both
       dry_run:
-        description: Build encrypted previews without sending
+        description: Build sealed previews without sending
         type: boolean
         default: false
       report_date:
@@ -36,8 +36,11 @@ concurrency:
   group: digest-daily-conversion-${{ github.event_name == 'schedule' && (startsWith(github.event.schedule, '17 ') && 'ist' || 'pt') || inputs.edition || 'both' }}-${{ github.event_name }}
   cancel-in-progress: false
 
+defaults:
+  run:
+    shell: "seal-bash-e {0}"
+
 env:
-  RAW: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}
   EVENT: ${{ github.event_name }}
   SCHEDULE: ${{ github.event.schedule }}
   WORKFLOW: daily-conversion.yml
@@ -58,16 +61,20 @@ jobs:
       timezone: ${{ steps.settings.outputs.timezone }}
       sent_step: ${{ steps.settings.outputs.sent_step }}
     steps:
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/common
+            data
       - name: Resolve edition
         id: settings
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          for file in workflow.py catchup_gate.py; do
-            curl -fsSL --retry 3 -o "$file" "$RAW/scripts/common/$file"
-          done
-          curl -fsSL --retry 3 -o email_config.json "$RAW/data/email_config.json"
-          python3 workflow.py settings
+        run: python3 scripts/common/workflow.py settings
       - name: First timing gate
         id: timing
         env:
@@ -79,9 +86,11 @@ jobs:
           if [ "$EVENT" = workflow_dispatch ]; then
             echo 'proceed=true' >> "$GITHUB_OUTPUT"
           else
-            python3 catchup_gate.py --phase 1 --event "$EVENT" --workflow "$WORKFLOW" \
+            python3 scripts/common/gate.py --phase 1 --event "$EVENT" --workflow "$WORKFLOW" \
               --sent-step "$SENT_STEP" --tz "$ZONE" --target 05:05 --report-date "$REPORT_DATE"
           fi
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1
 
   gate2:
     needs: gate
@@ -93,6 +102,15 @@ jobs:
       editions: ${{ needs.gate.outputs.editions }}
       report_date: ${{ needs.gate.outputs.report_date }}
     steps:
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/common
+            data
       - name: Second timing gate
         id: timing
         env:
@@ -104,10 +122,11 @@ jobs:
           if [ "$EVENT" = workflow_dispatch ]; then
             echo 'proceed=true' >> "$GITHUB_OUTPUT"
           else
-            curl -fsSL --retry 3 -o catchup_gate.py "$RAW/scripts/common/catchup_gate.py"
-            python3 catchup_gate.py --phase 2 --event "$EVENT" --workflow "$WORKFLOW" \
+            python3 scripts/common/gate.py --phase 2 --event "$EVENT" --workflow "$WORKFLOW" \
               --sent-step "$SENT_STEP" --tz "$ZONE" --target 05:05 --report-date "$REPORT_DATE"
           fi
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1
 
   email:
     needs: gate2

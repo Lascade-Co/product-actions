@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: Build preview without sending
+        description: Build sealed preview without sending
         type: boolean
         default: false
       report_date:
@@ -31,14 +31,24 @@ concurrency:
   group: digest-incomplete-checkout
   cancel-in-progress: false
 
+defaults:
+  run:
+    shell: "seal-bash-e {0}"
+
 jobs:
   outreach:
     runs-on: ubuntu-latest
+    environment: production
     timeout-minutes: 30
+    env:
+      PYTHONPATH: scripts/common:scripts/incomplete_checkout
     steps:
-      - uses: actions/checkout@v6
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
+          persist-credentials: false
           sparse-checkout: |
             scripts
             data
@@ -47,41 +57,36 @@ jobs:
           python-version: '3.13'
       - name: Install dependencies
         run: pip install --quiet requests==2.34.2
+      # The test recipient is read from the event file inside the sealed shell, never expanded into the public step header.
       - name: Send incomplete checkout outreach
         env:
           STRIPE_API_KEY: ${{ secrets.STRIPE_API_KEY }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          REPORT_DATE: ${{ inputs.report_date }}
+          SINCE: ${{ inputs.since }}
         run: |
           FLAGS=()
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            FLAGS+=(--dry-run)
-          fi
-          if [ -n "${{ inputs.report_date }}" ]; then
-            FLAGS+=(--report-date "${{ inputs.report_date }}")
-          fi
-          if [ -n "${{ inputs.since }}" ]; then
-            FLAGS+=(--since "${{ inputs.since }}")
-          fi
-          if [ -n "${{ inputs.to }}" ]; then
-            FLAGS+=(--to "${{ inputs.to }}")
-          fi
-          python3 -m scripts.incomplete_checkout.main "${FLAGS[@]}"
-      - name: Encrypt preview
+          [ "$DRY_RUN" = "true" ] && FLAGS+=(--dry-run)
+          [ -n "$REPORT_DATE" ] && FLAGS+=(--report-date "$REPORT_DATE")
+          [ -n "$SINCE" ] && FLAGS+=(--since "$SINCE")
+          TEST_TO=$(jq -r '.inputs.to // ""' "$GITHUB_EVENT_PATH")
+          [ -n "$TEST_TO" ] && FLAGS+=(--to "$TEST_TO")
+          python3 scripts/incomplete_checkout/ic_main.py "${FLAGS[@]}"
+      - name: Pack sealed preview
         if: ${{ inputs.dry_run }}
-        env:
-          PREVIEW_KEY: ${{ secrets.PREVIEW_KEY }}
-        run: |
-          test -n "$PREVIEW_KEY" || { echo "PREVIEW_KEY is required" >&2; exit 1; }
-          tar czf - out | openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:PREVIEW_KEY -out preview.tar.gz.enc
+        run: seal-pack preview-incomplete-checkout-ist out
       - name: Upload preview
         if: ${{ inputs.dry_run }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: preview-incomplete-checkout-ist
-          path: preview.tar.gz.enc
+          path: ${{ runner.temp }}/seal/art/preview-incomplete-checkout-ist/
           if-no-files-found: error
           retention-days: 3
       - name: Deliver incomplete checkout IST for ${{ inputs.report_date || 'today' }}
         if: ${{ !inputs.dry_run }}
         run: echo "Outreach emails sent"
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1
