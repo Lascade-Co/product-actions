@@ -9,7 +9,6 @@ from pathlib import Path
 import pytest
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent / "catchup"))
 import ip_watchdog as W
 
 
@@ -19,7 +18,7 @@ def utc(value):
 
 def trusted_run(run_id=7, **kw):
     return {"id": run_id, "run_attempt": 1, "event": "schedule", "head_branch": "main",
-            "head_repository": {"full_name": "Lascade-Co/actions"}, **kw}
+            "head_repository": {"full_name": "Lascade-Co/product-actions"}, **kw}
 
 
 def history(runs, steps):
@@ -80,11 +79,26 @@ class TestWatchdogEditions:
                 stamp = utc(f"{season}T{hour:02}:{minute:02}:00")
                 assert W.decide(stamp, edition=edition, phase=phase)[0] is want, (cron, stamp)
 
+    def test_watchdog_matches_new_step_names(self):
+        from ip_editions import get_edition
+        day = dt.date(2026, 7, 1)
+        pt, ist = get_edition("pt"), get_edition("ist")
+        assert pt.sent_step == "Deliver install paid PT for "
+        assert ist.sent_step == "Deliver install paid IST for "
+        assert pt.alert_step(day, "prep") == "Prep alert install paid PT for 2026-07-01"
+        assert pt.alert_step(day, "deliver") == "Alert install paid PT for 2026-07-01"
+        assert ist.alert_step(day, "prep") == "Prep alert install paid IST for 2026-07-01"
+        assert ist.alert_step(day, "deliver") == "Alert install paid IST for 2026-07-01"
+        old = history([trusted_run()], {(7, 1): [step("Alert PT for 2026-07-01")]})
+        new = history([trusted_run()], {(7, 1): [step("Alert install paid PT for 2026-07-01")]})
+        assert not W.alerted_today(day, old, edition="pt", phase="deliver")
+        assert W.alerted_today(day, new, edition="pt", phase="deliver")
+
     @pytest.mark.parametrize("edition,phase,stamp,expected_step", [
-        ("pt", "prep", "2026-07-01T12:30:00", "Deliver for "),
-        ("pt", "deliver", "2026-07-01T13:15:00", "Deliver for "),
-        ("ist", "prep", "2026-07-01T00:00:00", "Deliver IST for "),
-        ("ist", "deliver", "2026-07-01T00:45:00", "Deliver IST for "),
+        ("pt", "prep", "2026-07-01T12:30:00", "Deliver install paid PT for "),
+        ("pt", "deliver", "2026-07-01T13:15:00", "Deliver install paid PT for "),
+        ("ist", "prep", "2026-07-01T00:00:00", "Deliver install paid IST for "),
+        ("ist", "deliver", "2026-07-01T00:45:00", "Deliver install paid IST for "),
     ])
     def test_successful_delivery_suppresses_its_edition(self, monkeypatch, edition, phase, stamp, expected_step):
         def sent(today, now, **kw):
@@ -94,22 +108,22 @@ class TestWatchdogEditions:
         assert W.decide(utc(stamp), edition=edition, phase=phase)[0] is False
 
     @pytest.mark.parametrize("edition,phase,alert_name", [
-        ("pt", "prep", "Prep alert PT for 2026-07-01"),
-        ("pt", "deliver", "Alert PT for 2026-07-01"),
-        ("ist", "prep", "Prep alert IST for 2026-07-01"),
-        ("ist", "deliver", "Alert IST for 2026-07-01"),
+        ("pt", "prep", "Prep alert install paid PT for 2026-07-01"),
+        ("pt", "deliver", "Alert install paid PT for 2026-07-01"),
+        ("ist", "prep", "Prep alert install paid IST for 2026-07-01"),
+        ("ist", "deliver", "Alert install paid IST for 2026-07-01"),
     ])
     def test_alert_dedupe_is_edition_and_phase_specific(self, edition, phase, alert_name):
         today = dt.date(2026, 7, 1)
-        for existing in ("Prep alert PT for 2026-07-01", "Alert PT for 2026-07-01",
-                         "Prep alert IST for 2026-07-01", "Alert IST for 2026-07-01"):
+        for existing in ("Prep alert install paid PT for 2026-07-01", "Alert install paid PT for 2026-07-01",
+                         "Prep alert install paid IST for 2026-07-01", "Alert install paid IST for 2026-07-01"):
             fetch = history([trusted_run()], {(7, 1): [step(existing)]})
             assert W.alerted_today(today, fetch, edition=edition, phase=phase) is (existing == alert_name)
 
     def test_all_attempts_include_current_run_and_ignore_job_failure(self, monkeypatch):
         monkeypatch.setenv("GITHUB_RUN_ID", "7")
         today = dt.date(2026, 7, 1)
-        fetch = history([trusted_run(run_attempt=3)], {(7, 1): [step("Alert IST for 2026-07-01")]})
+        fetch = history([trusted_run(run_attempt=3)], {(7, 1): [step("Alert install paid IST for 2026-07-01")]})
         assert W.alerted_today(today, fetch, edition="ist", phase="deliver")
 
     @pytest.mark.parametrize("bad", [
@@ -117,12 +131,12 @@ class TestWatchdogEditions:
         {"head_repository": {"full_name": "elsewhere/actions"}}, {"head_repository": None},
     ])
     def test_untrusted_run_cannot_suppress_alert(self, bad):
-        fetch = history([trusted_run(**bad)], {(7, 1): [step("Alert IST for 2026-07-01")]})
+        fetch = history([trusted_run(**bad)], {(7, 1): [step("Alert install paid IST for 2026-07-01")]})
         assert not W.alerted_today(dt.date(2026, 7, 1), fetch, edition="ist", phase="deliver")
 
     def test_failed_or_other_date_alert_does_not_suppress(self):
-        fetch = history([trusted_run()], {(7, 1): [step("Alert IST for 2026-07-01", "failure"),
-                                                  step("Alert IST for 2026-06-30")]})
+        fetch = history([trusted_run()], {(7, 1): [step("Alert install paid IST for 2026-07-01", "failure"),
+                                                  step("Alert install paid IST for 2026-06-30")]})
         assert not W.alerted_today(dt.date(2026, 7, 1), fetch, edition="ist", phase="deliver")
 
     def test_history_failure_alerts_without_logging_exception_body(self, monkeypatch, capsys):
@@ -132,10 +146,10 @@ class TestWatchdogEditions:
         assert "private-response" not in capsys.readouterr().err
 
     @pytest.mark.parametrize("edition,phase,stamp,alert_name,word", [
-        ("pt", "prep", "2026-07-01T12:30:00", "Prep alert PT for 2026-07-01", "at risk"),
-        ("pt", "deliver", "2026-07-01T13:15:00", "Alert PT for 2026-07-01", "missed"),
-        ("ist", "prep", "2026-07-01T00:00:00", "Prep alert IST for 2026-07-01", "at risk"),
-        ("ist", "deliver", "2026-07-01T00:45:00", "Alert IST for 2026-07-01", "missed"),
+        ("pt", "prep", "2026-07-01T12:30:00", "Prep alert install paid PT for 2026-07-01", "at risk"),
+        ("pt", "deliver", "2026-07-01T13:15:00", "Alert install paid PT for 2026-07-01", "missed"),
+        ("ist", "prep", "2026-07-01T00:00:00", "Prep alert install paid IST for 2026-07-01", "at risk"),
+        ("ist", "deliver", "2026-07-01T00:45:00", "Alert install paid IST for 2026-07-01", "missed"),
     ])
     def test_cli_outputs_recovery_instructions(self, monkeypatch, tmp_path, edition, phase, stamp, alert_name, word):
         monkeypatch.setenv("NOW", stamp + "+00:00")
@@ -167,7 +181,7 @@ class TestWatchdogEditions:
         selector = next((s for s in workflow["jobs"]["watch"]["steps"] if s.get("id") == "edition"), None)
         assert selector is not None, "workflow must resolve its edition through the shared settings"
         output = tmp_path / "outputs"
-        env = dict(os.environ, EVENT_NAME=event, SCHEDULE=schedule, INPUT_EDITION=chosen,
+        env = dict(os.environ, GITHUB_REPOSITORY="Lascade-Co/product-actions", EVENT_NAME=event, SCHEDULE=schedule, INPUT_EDITION=chosen,
                    INPUT_PHASE=phase, GITHUB_OUTPUT=str(output),
                    PATH=str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"])
         result = subprocess.run(["bash", "-e", "-c", selector["run"]], cwd=root, env=env,
@@ -202,7 +216,7 @@ class TestWatchdogEditions:
         today = dt.date(2026, 7, 1)
         def fetch(path):
             if "/jobs" in path:
-                return {"jobs": [{"steps": [step("Prep alert IST for 2026-07-01")]}]}
+                return {"jobs": [{"steps": [step("Prep alert install paid IST for 2026-07-01")]}]}
             # GitHub filters by original creation time, not the rerun's start.
             runs = [] if "created=" in path else [trusted_run(created_at="2026-01-01T00:00:00Z", run_attempt=2)]
             return {"workflow_runs": runs}
@@ -213,7 +227,7 @@ class TestWatchdogEditions:
         def fetch(path):
             if "/jobs" in path:
                 if "page=2" in path:
-                    return {"jobs": [{"steps": [step("Alert PT for 2026-07-01")]}]}
+                    return {"jobs": [{"steps": [step("Alert install paid PT for 2026-07-01")]}]}
                 return {"jobs": [{"steps": []}] * 100}
             if "page=2" in path:
                 return {"workflow_runs": [trusted_run()]}

@@ -23,10 +23,6 @@ on:
         description: Explicitly send another copy even after an accepted send; does not count for dedupe
         type: boolean
         default: false
-      schedule_in_min:
-        description: PT test only, schedule 2 or more minutes from now; 0 uses normal timing
-        type: number
-        default: 0
       test_alert:
         description: Test only, fail the run on purpose to exercise the Telegram alert
         type: boolean
@@ -52,7 +48,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RAW: https://raw.githubusercontent.com/Lascade-Co/actions/${{ github.sha }}
   EVENT: ${{ github.event_name }}
   SCHEDULE: ${{ github.event.schedule }}
   INPUT_EDITION: ${{ inputs.edition || 'pt' }}
@@ -60,7 +55,7 @@ env:
   DRY_RUN: ${{ inputs.dry_run }}
   RECOVERY: ${{ inputs.recovery }}
   FORCE_RESEND: ${{ inputs.force_resend }}
-  SCHEDULE_IN_MIN: ${{ inputs.schedule_in_min || 0 }}
+  PYTHONPATH: ${{ github.workspace }}/scripts/common:${{ github.workspace }}/scripts/installpaid
 
 defaults:
   run:
@@ -78,38 +73,31 @@ jobs:
       sent_step: ${{ steps.settings.outputs.sent_step }}
     steps:
       - name: Seal job output
-        shell: bash
-        run: |
-          u="https://raw.githubusercontent.com/Lascade-Co/actions/${{ github.workflow_sha }}/scripts/seal/install.sh"
-          curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 60 -o "$RUNNER_TEMP/seal-install.tmp" "$u"
-          test -s "$RUNNER_TEMP/seal-install.tmp" && mv "$RUNNER_TEMP/seal-install.tmp" "$RUNNER_TEMP/seal-install.sh"
-          SEAL_REF="${{ github.workflow_sha }}" bash "$RUNNER_TEMP/seal-install.sh"
+        uses: Lascade-Co/actions/actions/seal@seal-v1
 
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: |
+            scripts/common
+            scripts/installpaid
+          sparse-checkout-cone-mode: false
       - name: Resolve edition
         id: settings
-        run: |
-          for file in ip_editions.py ip_workflow.py; do
-            curl -fsSL --retry 3 -o "$file" "$RAW/scripts/installpaid/$file"
-          done
-          curl -fsSL --retry 3 -o catchup_gate.py "$RAW/scripts/catchup/catchup_gate.py"
-          python3 ip_workflow.py settings
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/installpaid/ip_workflow.py settings
       - id: gate
         env:
           GH_TOKEN: ${{ github.token }}
           ZONE: ${{ steps.settings.outputs.timezone }}
           SENT_STEP: ${{ steps.settings.outputs.sent_step }}
         run: |
-          python3 catchup_gate.py --phase 1 --event "$EVENT" --workflow daily-install-paid.yml \
+          python3 scripts/common/gate.py --phase 1 --event "$EVENT" --workflow daily-install-paid.yml \
             --sent-step "$SENT_STEP" --tz "$ZONE" --target 05:05
 
-      - name: Upload sealed log
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.SEAL_LOG_ARTIFACT }}
-          path: ${{ runner.temp }}/seal/out/
-          retention-days: 7
-          if-no-files-found: ignore
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1
 
   gate2:
     needs: gate
@@ -122,13 +110,13 @@ jobs:
       edition: ${{ needs.gate.outputs.edition }}
     steps:
       - name: Seal job output
-        shell: bash
-        run: |
-          u="https://raw.githubusercontent.com/Lascade-Co/actions/${{ github.workflow_sha }}/scripts/seal/install.sh"
-          curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 60 -o "$RUNNER_TEMP/seal-install.tmp" "$u"
-          test -s "$RUNNER_TEMP/seal-install.tmp" && mv "$RUNNER_TEMP/seal-install.tmp" "$RUNNER_TEMP/seal-install.sh"
-          SEAL_REF="${{ github.workflow_sha }}" bash "$RUNNER_TEMP/seal-install.sh"
+        uses: Lascade-Co/actions/actions/seal@seal-v1
 
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: scripts/common
+          sparse-checkout-cone-mode: false
       - id: gate
         env:
           GH_TOKEN: ${{ github.token }}
@@ -136,18 +124,11 @@ jobs:
           SENT_STEP: ${{ needs.gate.outputs.sent_step }}
           REPORT_DATE: ${{ needs.gate.outputs.report_date }}
         run: |
-          curl -fsSL --retry 3 -o catchup_gate.py "$RAW/scripts/catchup/catchup_gate.py"
-          python3 catchup_gate.py --phase 2 --event "$EVENT" --workflow daily-install-paid.yml \
+          python3 scripts/common/gate.py --phase 2 --event "$EVENT" --workflow daily-install-paid.yml \
             --sent-step "$SENT_STEP" --tz "$ZONE" --target 05:05 --report-date "$REPORT_DATE"
 
-      - name: Upload sealed log
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.SEAL_LOG_ARTIFACT }}
-          path: ${{ runner.temp }}/seal/out/
-          retention-days: 7
-          if-no-files-found: ignore
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1
 
   # Keep the job name: dated successful Deliver steps record Resend acceptance.
   email:
@@ -163,18 +144,14 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Seal job output
-        shell: bash
-        run: |
-          u="https://raw.githubusercontent.com/Lascade-Co/actions/${{ github.workflow_sha }}/scripts/seal/install.sh"
-          curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 60 -o "$RUNNER_TEMP/seal-install.tmp" "$u"
-          test -s "$RUNNER_TEMP/seal-install.tmp" && mv "$RUNNER_TEMP/seal-install.tmp" "$RUNNER_TEMP/seal-install.sh"
-          SEAL_REF="${{ github.workflow_sha }}" bash "$RUNNER_TEMP/seal-install.sh"
+        uses: Lascade-Co/actions/actions/seal@seal-v1
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
+          ref: ${{ github.sha }}
           sparse-checkout: |
+            scripts/common
             scripts/installpaid
-            scripts/catchup/catchup_gate.py
             data/installpaid_google_ipranges.json
           sparse-checkout-cone-mode: false
       - name: Set up Python
@@ -186,21 +163,15 @@ jobs:
       - name: Work out the report date
         id: dates
         env:
+          GH_TOKEN: ${{ github.token }}
           REPORT_DATE: ${{ github.event_name == 'schedule' && needs.gate2.outputs.report_date || inputs.report_date }}
         run: python3 scripts/installpaid/ip_workflow.py settings
-      - name: Check it has not gone out already
-        id: dedupe
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPORT_DATE: ${{ steps.dates.outputs.report_date }}
-        run: python3 scripts/installpaid/ip_workflow.py dedupe
       - name: Fail on purpose (alert test)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.test_alert }}
         run: |
           echo "test_alert is set: failing so the Telegram alert fires"
           exit 1
       - name: Build the email
-        if: ${{ steps.dedupe.outputs.sent != 'True' }}
         working-directory: scripts/installpaid
         env:
           POSTHOG_PERSONAL_API_KEY: ${{ secrets.POSTHOG_QUERY_API_KEY }}
@@ -208,7 +179,35 @@ jobs:
           REPORT_DATE: ${{ steps.dates.outputs.report_date }}
           EDITION: ${{ steps.dates.outputs.edition }}
         run: python3 ip_main.py --variant A --out out --edition "$EDITION" --report-date "$REPORT_DATE"
-      # PT retains "Deliver for D". Tests and forced sends never count for dedupe.
+      - name: Pack the preview
+        if: ${{ inputs.dry_run }}
+        env:
+          EDITION: ${{ steps.dates.outputs.edition }}
+        run: seal-pack "preview-install-paid-$EDITION" scripts/installpaid/out
+      - name: Upload the preview
+        if: ${{ inputs.dry_run }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: preview-install-paid-${{ steps.dates.outputs.edition }}
+          path: ${{ runner.temp }}/seal/art/preview-install-paid-${{ steps.dates.outputs.edition }}/
+          retention-days: 7
+          if-no-files-found: error
+      # Lateness never fails delivery: a late build sends at once with the original date.
+      # A forced send is explicit and goes out now.
+      - name: Hold until 05:55 local
+        if: ${{ !inputs.dry_run && steps.dates.outputs.mode != 'forced' }}
+        env:
+          REPORT_DATE: ${{ steps.dates.outputs.report_date }}
+          ZONE: ${{ steps.dates.outputs.timezone }}
+        run: python3 scripts/common/hold.py --report-date "$REPORT_DATE" --tz "$ZONE" --target 05:55
+      - name: Check it has not gone out already
+        id: dedupe
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPORT_DATE: ${{ steps.dates.outputs.report_date }}
+        run: python3 scripts/installpaid/ip_workflow.py dedupe
+      # Tests and forced sends never count for dedupe.
       - name: ${{ steps.dates.outputs.send_step }}
         if: ${{ !inputs.dry_run && steps.dedupe.outputs.sent != 'True' }}
         working-directory: scripts/installpaid
@@ -217,24 +216,17 @@ jobs:
           REPORT_DATE: ${{ steps.dates.outputs.report_date }}
           EDITION: ${{ steps.dates.outputs.edition }}
           MODE: ${{ steps.dates.outputs.mode }}
-          OFFSET: ${{ steps.dates.outputs.schedule_in_min }}
           RUN_ID: ${{ github.run_id }}
           TEST_TAG: ${{ github.run_number }}
         run: |
           FLAGS=()
           if [ "$MODE" = real ] && [ "$EVENT" = workflow_dispatch ]; then FLAGS+=(--recovery); fi
           if [ "$MODE" = forced ]; then FLAGS+=(--force-resend); fi
-          bash send_resend_ip.sh --edition "$EDITION" --report-date "$REPORT_DATE" --event "$EVENT" \
-            --run-id "$RUN_ID" --schedule-in-min "$OFFSET" --test-tag "$TEST_TAG" "${FLAGS[@]}"
+          python3 ip_send.py --edition "$EDITION" --report-date "$REPORT_DATE" --event "$EVENT" \
+            --run-id "$RUN_ID" --test-tag "$TEST_TAG" "${FLAGS[@]}"
 
-      - name: Upload sealed log
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.SEAL_LOG_ARTIFACT }}
-          path: ${{ runner.temp }}/seal/out/
-          retention-days: 7
-          if-no-files-found: ignore
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1
 
   # Separate job catches either gate, build or send failures. Delivery after a
   # successful Resend acceptance remains outside this workflow's monitoring.
@@ -246,13 +238,21 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Seal job output
-        shell: bash
-        run: |
-          u="https://raw.githubusercontent.com/Lascade-Co/actions/${{ github.workflow_sha }}/scripts/seal/install.sh"
-          curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 60 -o "$RUNNER_TEMP/seal-install.tmp" "$u"
-          test -s "$RUNNER_TEMP/seal-install.tmp" && mv "$RUNNER_TEMP/seal-install.tmp" "$RUNNER_TEMP/seal-install.sh"
-          SEAL_REF="${{ github.workflow_sha }}" bash "$RUNNER_TEMP/seal-install.sh"
+        uses: Lascade-Co/actions/actions/seal@seal-v1
 
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: |
+            scripts/common
+            scripts/installpaid
+          sparse-checkout-cone-mode: false
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Install dependencies
+        run: pip install --quiet requests==2.34.2
       - name: Alert on Telegram
         env:
           GH_TOKEN: ${{ github.token }}
@@ -262,20 +262,9 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           WF_URL: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/daily-install-paid.yml
         run: |
-          for file in ip_editions.py ip_workflow.py; do curl -fsSL --retry 3 -o "$file" "$RAW/scripts/installpaid/$file"; done
-          curl -fsSL --retry 3 -o catchup_gate.py "$RAW/scripts/catchup/catchup_gate.py"
           NOW=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" --jq .run_started_at 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
           export NOW
-          MESSAGE=$(python3 ip_workflow.py failure-message)
-          curl -fsS --max-time 30 -o /dev/null "https://api.telegram.org/bot$TOKEN/sendMessage" \
-            --data-urlencode chat_id="$CHAT" --data-urlencode text="$MESSAGE"
-          echo "alert sent"
+          python3 scripts/installpaid/ip_workflow.py notify
 
-      - name: Upload sealed log
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.SEAL_LOG_ARTIFACT }}
-          path: ${{ runner.temp }}/seal/out/
-          retention-days: 7
-          if-no-files-found: ignore
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1

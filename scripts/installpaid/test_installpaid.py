@@ -16,11 +16,6 @@ sys.path.insert(0, HERE)
 import ip_fetch as F  # noqa: E402
 import ip_model as M  # noqa: E402
 import ip_render_email as R  # noqa: E402
-from test_ip_delivery import TestEditionDelivery  # noqa: E402,F401
-from test_ip_crosscheck import TestMuscatCrosscheck  # noqa: E402,F401
-from test_ip_sender import TestSender  # noqa: E402,F401
-from test_ip_deadline import TestAbsoluteDeadline  # noqa: E402,F401
-from test_ip_workflow import TestDailyWorkflow  # noqa: E402,F401
 
 D0 = dt.date(2026, 10, 1)
 CIDRS = ["70.32.128.0/19", "2001:4860::/32"]
@@ -428,7 +423,6 @@ def test_crosscheck_compares_every_field():
 
 # ---- Phase B: delivery ----
 
-sys.path.insert(0, os.path.join(HERE, "..", "catchup"))
 
 
 def _utc(s):
@@ -465,7 +459,7 @@ def _decide(monkeypatch, now, sent=False, alerted=False):
                         else (lambda *a, **k: (_ for _ in ()).throw(alerted)))
     with redirect_stderr(io.StringIO()):
         out = W.decide(_utc(now))
-    assert not seen or seen["sent_step"] == "Deliver for "
+    assert not seen or seen["sent_step"] == "Deliver install paid PT for "
     return out[0]
 
 
@@ -491,56 +485,19 @@ def test_watchdog_counts_only_a_successful_alert_step_for_today(monkeypatch):
                 return {"jobs": [{"steps": steps.get(rid, [])}]}
             return {"workflow_runs": runs}
         return f
-    ok = {"name": "Alert PT for 2026-10-20", "conclusion": "success"}
-    tr = {"event": "schedule", "head_branch": "main", "head_repository": {"full_name": "Lascade-Co/actions"}}
+    ok = {"name": "Alert install paid PT for 2026-10-20", "conclusion": "success"}
+    tr = {"event": "schedule", "head_branch": "main", "head_repository": {"full_name": "Lascade-Co/product-actions"}}
     assert W.alerted_today(today, fetch([dict(tr, id=7)], {7: [ok]}))
     assert W.alerted_today(today, fetch([dict(tr, id=9)], {9: [ok]}))                               # earlier attempt of this run
     assert not W.alerted_today(today, fetch([dict(tr, id=7)], {7: [dict(ok, conclusion="failure")]}))  # send failed
-    assert not W.alerted_today(today, fetch([dict(tr, id=7)], {7: [dict(ok, name="Alert PT for 2026-10-19")]}))
+    assert not W.alerted_today(today, fetch([dict(tr, id=7)], {7: [dict(ok, name="Alert install paid PT for 2026-10-19")]}))
     assert not W.alerted_today(today, fetch([dict(tr, id=7, event="pull_request")], {7: [ok]}))     # fork copy
     assert not W.alerted_today(today, fetch([dict(tr, id=7, head_repository={"full_name": "x/actions"})], {7: [ok]}))
-
-
-def test_gate_dedupe_matches_the_report_date_step():
-    import catchup_gate as G
-    rd, now = dt.date(2026, 10, 21), _utc("2026-10-21T12:50:00")
-    job = lambda name: {"name": "email", "conclusion": "success", "completed_at": "2026-10-20T23:10:00Z",
-                        "steps": [{"name": name, "conclusion": "success"}]}
-    f = lambda j: (lambda path: {"jobs": [j]} if "/jobs" in path else {"workflow_runs": [
-        {"id": 5, "event": "schedule", "head_branch": "main", "head_repository": {"full_name": "Lascade-Co/actions"}}]})
-    # finished after 16:00 PT the day before, but for the previous date: not today's send
-    assert not G.already_sent(rd, now, f(job("Send for 2026-10-20")), workflow="w", sent_step="Send for ")
-    assert G.already_sent(rd, now, f(job("Send for 2026-10-21")), workflow="w", sent_step="Send for ")
 
 
 def test_subject_carries_the_latest_full_day():
     m = model({"ios": [row("4.1.0", LAST, 900, paid=45)], "android": []})
     assert R.subject_of(m) == "TravelAnimator install→paid · Sun 18 Oct: iOS 5.0% · Android 5.x —"
-
-
-def test_dated_dedupe_counts_recovery_runs_of_any_event():
-    import catchup_gate as G
-    seen = []
-    def f(path):
-        seen.append(path)
-        return {"jobs": [{"name": "email", "conclusion": "success", "completed_at": "2026-10-21T13:00:00Z",
-                          "steps": [{"name": "Deliver for 2026-10-21", "conclusion": "success"}]}]} \
-            if "/jobs" in path else {"workflow_runs": [dict(run)]}
-    run = {"id": 5, "event": "workflow_dispatch", "head_branch": "main",
-           "head_repository": {"full_name": "Lascade-Co/actions"}}
-    assert G.already_sent(dt.date(2026, 10, 21), _utc("2026-10-21T14:00:00"), f, workflow="w", sent_step="Deliver for ")
-    for bad in ({"event": "pull_request"}, {"head_branch": "evil"},
-                {"head_repository": {"full_name": "someone/actions"}}):
-        run = {"id": 5, "event": "workflow_dispatch", "head_branch": "main",
-               "head_repository": {"full_name": "Lascade-Co/actions"}, **bad}
-        assert not G.already_sent(dt.date(2026, 10, 21), _utc("2026-10-21T14:00:00"), f, workflow="w",
-                                  sent_step="Deliver for "), bad
-    run = {"id": 5, "event": "schedule", "head_branch": "main", "head_repository": {"full_name": "Lascade-Co/actions"}}
-    assert not G.already_sent(dt.date(2026, 10, 21), _utc("2026-10-21T14:00:00"), f, workflow="w", sent_step="Send for ")
-    assert "event=schedule" not in seen[0]
-    seen.clear()
-    G.already_sent(dt.date(2026, 10, 21), _utc("2026-10-21T14:00:00"), f, workflow="w")   # legacy callers
-    assert "event=schedule" in seen[0]
 
 
 # Include edition and phase cases in the required verification entrypoint.

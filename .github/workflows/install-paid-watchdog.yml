@@ -40,20 +40,21 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Seal job output
-        shell: bash
-        run: |
-          u="https://raw.githubusercontent.com/Lascade-Co/actions/${{ github.workflow_sha }}/scripts/seal/install.sh"
-          curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 60 -o "$RUNNER_TEMP/seal-install.tmp" "$u"
-          test -s "$RUNNER_TEMP/seal-install.tmp" && mv "$RUNNER_TEMP/seal-install.tmp" "$RUNNER_TEMP/seal-install.sh"
-          SEAL_REF="${{ github.workflow_sha }}" bash "$RUNNER_TEMP/seal-install.sh"
+        uses: Lascade-Co/actions/actions/seal@seal-v1
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
+          ref: ${{ github.sha }}
           sparse-checkout: |
-            scripts/catchup/catchup_gate.py
-            scripts/installpaid/ip_watchdog.py
-            scripts/installpaid/ip_editions.py
+            scripts/common
+            scripts/installpaid
           sparse-checkout-cone-mode: false
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Install dependencies
+        run: pip install --quiet requests==2.34.2
 
       - name: Resolve edition and phase
         id: edition
@@ -63,9 +64,9 @@ jobs:
           INPUT_EDITION: ${{ inputs.edition || 'pt' }}
           INPUT_PHASE: ${{ inputs.phase || 'deliver' }}
         run: |
-          PYTHONPATH=scripts/installpaid:scripts/catchup python3 - <<'PY'
+          PYTHONPATH=scripts/installpaid:scripts/common python3 - <<'PY'
           import os
-          from catchup_gate import emit
+          from gate import emit
           from ip_editions import get_edition, resolve_watchdog_schedule
           edition, phase = (resolve_watchdog_schedule(os.environ['SCHEDULE']) if os.environ['EVENT_NAME'] == 'schedule'
                             else (os.environ['INPUT_EDITION'], os.environ['INPUT_PHASE']))
@@ -81,7 +82,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EDITION: ${{ steps.edition.outputs.edition }}
           PHASE: ${{ steps.edition.outputs.phase }}
-        run: PYTHONPATH=scripts/catchup python3 scripts/installpaid/ip_watchdog.py --edition "$EDITION" --phase "$PHASE"
+        run: PYTHONPATH=scripts/common python3 scripts/installpaid/ip_watchdog.py --edition "$EDITION" --phase "$PHASE"
 
       # The successful dated step is the acceptance marker for this warning phase.
       - name: ${{ steps.check.outputs.alert_step }}
@@ -91,17 +92,7 @@ jobs:
           CHAT: ${{ secrets.INSTALLPAID_TELEGRAM_CHAT }}
           MESSAGE: ${{ steps.check.outputs.message }}
           URL: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/daily-install-paid.yml
-        run: |
-          curl -fsS --max-time 30 -o /dev/null "https://api.telegram.org/bot$TOKEN/sendMessage" \
-            --data-urlencode chat_id="$CHAT" \
-            --data-urlencode text="$MESSAGE. $URL"
-          echo "alert sent"
+        run: PYTHONPATH=scripts/common python3 scripts/installpaid/ip_alert.py
 
-      - name: Upload sealed log
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.SEAL_LOG_ARTIFACT }}
-          path: ${{ runner.temp }}/seal/out/
-          retention-days: 7
-          if-no-files-found: ignore
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1

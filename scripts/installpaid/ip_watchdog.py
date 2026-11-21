@@ -15,7 +15,7 @@ import datetime as dt
 import os
 import sys
 
-import catchup_gate as G
+import gate as G
 from ip_editions import EDITIONS, get_edition
 
 WINDOWS = {"prep": (dt.time(5, 30), dt.time(6)), "deliver": (dt.time(6, 15), dt.time(12))}
@@ -23,7 +23,7 @@ WINDOWS = {"prep": (dt.time(5, 30), dt.time(6)), "deliver": (dt.time(6, 15), dt.
 
 def alerted_today(today, fetch=G.gh_json, *, edition="pt", phase="deliver"):
     setting = get_edition(edition)
-    repo = os.environ.get("GITHUB_REPOSITORY", "Lascade-Co/actions")
+    repo = os.environ.get("GITHUB_REPOSITORY", "Lascade-Co/product-actions")
     wanted = setting.alert_step(today, phase)
     since = dt.datetime.combine(today - dt.timedelta(days=2), dt.time(), dt.timezone.utc)
     # One budget spans run pages and every trusted run's attempt/job pages.

@@ -9,6 +9,10 @@ import re
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo
 
+from workflow import sent_prefix, step_name
+
+LABEL = "install paid"
+
 
 @dataclass(frozen=True)
 class Edition:
@@ -32,12 +36,12 @@ class Edition:
         return dt.datetime.combine(date, dt.time(hour, minute), self.zone).astimezone(dt.timezone.utc)
 
     def delivery_step(self, date):
-        return f"{self.sent_step}{date}"
+        return step_name(LABEL, self.label, date, "real")
 
     def alert_step(self, date, phase):
         if phase not in ("prep", "deliver"):
             raise ValueError("unknown watchdog phase")
-        return f"{'Prep alert' if phase == 'prep' else 'Alert'} {self.label} for {date}"
+        return f"{'Prep alert' if phase == 'prep' else 'Alert'} {LABEL} {self.label} for {date}"
 
     def send_key(self, date, event, run_id):
         if event not in ("schedule", "workflow_dispatch"):
@@ -65,9 +69,9 @@ def safe_suffix(value):
 
 
 EDITIONS = {
-    "pt": Edition("pt", "America/Los_Angeles", "cherian@lascade.com", "Deliver for ",
+    "pt": Edition("pt", "America/Los_Angeles", "cherian@lascade.com", sent_prefix(LABEL, "PT"),
                   tuple(f"41 {h} * * *" for h in (3, 6, 9)), "30 12,13 * * *", "15 13-19 * * *"),
-    "ist": Edition("ist", "Asia/Kolkata", "fasna@lascade.com", "Deliver IST for ",
+    "ist": Edition("ist", "Asia/Kolkata", "fasna@lascade.com", sent_prefix(LABEL, "IST"),
                    tuple(f"7 {h} * * *" for h in (13, 16, 19)), "0 0 * * *", "45 0-5 * * *"),
 }
 

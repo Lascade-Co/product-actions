@@ -4,16 +4,18 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import os
-from pathlib import Path
 import re
 import sys
 from zoneinfo import ZoneInfo
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "catchup"))
-import catchup_gate as G
+import dates
+import gate as G
+import workflow
 
 PT = ZoneInfo("America/Los_Angeles")
 TO = "cherian@lascade.com"
+LABEL = "hunch retention"
+SENT_STEP = workflow.sent_prefix(LABEL, "")
 
 
 def delivery_mode(event, recovery=False):
@@ -23,7 +25,7 @@ def delivery_mode(event, recovery=False):
 
 
 def delivery_step(date, mode):
-    return f"{'Test send for ' if mode == 'test' else 'Deliver for '}{date}"
+    return workflow.step_name(LABEL, "", date, mode)
 
 
 def settings(notification=False):
@@ -37,11 +39,12 @@ def settings(notification=False):
         except ValueError:
             if not notification:
                 raise
+    now = G.now_utc()
+    latest = dates.report_date_for(now, PT)
     if date is None and event == "schedule":
-        date = G.plan(G.now_utc(), tz=PT, target=(5, 5))[0]
+        date = G.plan(now, tz=PT, target=(5, 5))[0]
     elif date is None:
-        local = G.now_utc().astimezone(PT)
-        date = local.date() if local.time() >= dt.time(5) else local.date() - dt.timedelta(days=1)
+        date = latest
     to = (os.environ.get("INPUT_TO") or TO) if not notification else TO
     if (not re.fullmatch(r"[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+", to)
             or (mode != "test" and to != TO)):
@@ -50,6 +53,7 @@ def settings(notification=False):
 
 
 def emit(**values):
+    # File only: public-safe logs name no dates.
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
         with open(output, "a") as stream:
@@ -58,22 +62,34 @@ def emit(**values):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("settings", "dedupe", "failure-message"))
+    parser.add_argument("command", choices=("settings", "dedupe", "failure-message", "notify"))
     args = parser.parse_args(argv)
     try:
-        date, mode, to = settings(notification=args.command == "failure-message")
-        if args.command == "failure-message":
-            # The workflow captures this text for Telegram; it is never logged.
-            print(f"TreasureHunch retention for {date} failed. "
-                  f"Run: {os.environ.get('RUN_URL', '')}")
+        notification = args.command in ("failure-message", "notify")
+        date, mode, to = settings(notification=notification)
+        if notification:
+            # Public run metadata only; the token and chat id come from the environment.
+            message = f"TreasureHunch retention for {date} failed. Run: {os.environ.get('RUN_URL', '')}"
+            if args.command == "failure-message":
+                print(message)
+            else:
+                import notify  # needs requests; the gate jobs do not
+                try:
+                    notify.telegram_send(os.environ["TOKEN"], os.environ["CHAT"], message)
+                except (notify.NotifyError, KeyError):
+                    print("alert-failed", file=sys.stderr)
+                    return 1
+                print("alert-sent")
         elif args.command == "dedupe":
             accepted = mode == "real" and G.already_sent(
-                date, G.now_utc(), workflow="daily-hunch-retention.yml", sent_step="Deliver for ")
+                date, G.now_utc(), workflow="daily-hunch-retention.yml", sent_step=SENT_STEP)
             emit(sent=str(accepted))
             print("dedupe-ok")
         else:
-            emit(report_date=date, mode=mode, recipient=to,
-                 send_step=delivery_step(date, mode))
+            if mode == "real":
+                now = G.now_utc()
+                workflow.guard_real_run(dict(os.environ), date, dates.report_date_for(now, PT), now)
+            emit(report_date=date, mode=mode, recipient=to, send_step=delivery_step(date, mode))
             print("settings-ok")
         return 0
     except G.DedupeUnavailable:
@@ -84,6 +100,9 @@ def main(argv=None):
             return 0
         print("history-unavailable", file=sys.stderr)
         return 3
+    except workflow.SettingsError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     except (ValueError, KeyError):
         print("settings-invalid", file=sys.stderr)
         return 2

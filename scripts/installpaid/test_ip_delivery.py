@@ -12,14 +12,21 @@ def instant(value):
     return dt.datetime.fromisoformat(value).replace(tzinfo=UTC)
 
 
+@pytest.fixture(autouse=True)
+def fresh_main_run(monkeypatch):
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
+    monkeypatch.setenv("RUN_CREATED_AT", "2099-01-01T00:00:00Z")
+
+
 class TestEditionDelivery:
     def test_settings_isolate_recipients_steps_and_files(self):
         from ip_editions import get_edition, resolve_daily_schedule
         day = dt.date(2030, 1, 12)
         pt, ist = get_edition("pt"), get_edition("ist")
         assert pt.recipient and ist.recipient and pt.recipient != ist.recipient
-        assert pt.delivery_step(day) == "Deliver for 2030-01-12"
-        assert ist.delivery_step(day) == "Deliver IST for 2030-01-12"
+        assert pt.delivery_step(day) == "Deliver install paid PT for 2030-01-12"
+        assert ist.delivery_step(day) == "Deliver install paid IST for 2030-01-12"
         assert pt.send_key(day, "schedule", "sample") == "install-paid-pt-2030-01-12-scheduled"
         assert ist.send_key(day, "workflow_dispatch", "sample") == "install-paid-ist-2030-01-12-manual-sample"
         for event in ("schedule", "workflow_dispatch"):
@@ -47,26 +54,6 @@ class TestEditionDelivery:
         assert main.latest_ready_date(ready, edition) == date
         assert main.latest_ready_date(ready - dt.timedelta(seconds=1), edition) == date - dt.timedelta(days=1)
 
-    @pytest.mark.parametrize("started,frozen,want", [
-        ("05:05:00", "05:52:59", "05:55:00"),
-        ("05:47:59", "05:53:00", "05:55:00"),
-        ("05:05:00", "05:53:01", None),
-        ("05:48:00", "05:49:00", None),
-        ("06:20:00", "06:21:00", None),
-    ])
-    @pytest.mark.parametrize("edition", ["pt", "ist"])
-    def test_timing_table_uses_build_start_and_freeze_time(self, edition, started, frozen, want):
-        from ip_editions import get_edition
-        from ip_main import build_deadline
-        from ip_send import scheduled_time
-        e, date = get_edition(edition), dt.date(2030, 1, 12)
-        local = lambda t: dt.datetime.fromisoformat(f"2030-01-12T{t}").replace(tzinfo=e.zone).astimezone(UTC)
-        deadline = build_deadline(date, edition, local(started))
-        timing = {"edition": edition, "report_date": str(date), "started_at": local(started).isoformat(),
-                  "deadline": deadline.isoformat() if deadline else None}
-        got = scheduled_time(date, e, timing, local(frozen))
-        assert got == (local(want) if want else None)
-
     @pytest.mark.parametrize("edition,day,want", [
         ("pt", "2026-03-09", ("Sat 7 Mar", "1–7 Mar", "PT")),
         ("pt", "2026-11-02", ("Sat 31 Oct", "25–31 Oct", "PT")),
@@ -85,74 +72,6 @@ class TestEditionDelivery:
         last, week, label = want
         assert subject.startswith(f"TravelAnimator install→paid · {last}:")
         assert f"latest full day {last} · last 7 days {week}" in html and f"data to 05:00 {label}" in text
-
-    def test_payload_is_immutable_and_edition_bound(self, tmp_path):
-        import ip_send as send
-        from ip_editions import get_edition
-        for name, value in (("email-A.html", "<p>synthetic</p>"), ("email-A.txt", "synthetic"),
-                            ("subject-A.txt", "synthetic subject")):
-            (tmp_path / name).write_text(value)
-        (tmp_path / "build-timing.json").write_text(json.dumps({
-            "edition": "pt", "report_date": "2030-01-12", "started_at": "2030-01-12T13:05:00+00:00",
-            "deadline": "2030-01-12T13:48:00+00:00"}))
-        args = (tmp_path, "pt", dt.date(2030, 1, 12), "synthetic", "schedule")
-        payload = send.freeze_payload(*args, now=lambda: instant("2030-01-12T13:52"))
-        frozen = payload.read_bytes()
-        body = json.loads(frozen)
-        assert body["to"] == [get_edition("pt").recipient]
-        assert body["scheduled_at"] == "2030-01-12T13:55:00+00:00"
-        assert payload.name == "payload-pt-2030-01-12-synthetic.json"
-        (tmp_path / "subject-A.txt").write_text("changed source")
-        assert send.freeze_payload(*args, now=lambda: instant("2030-01-12T14:00")).read_bytes() == frozen
-        with pytest.raises(ValueError):
-            send.freeze_payload(tmp_path, "ist", dt.date(2030, 1, 12), "synthetic", "schedule")
-
-    def test_sender_retries_identical_bytes_and_enforces_start_deadline(self, tmp_path):
-        import ip_send as send
-        payload = tmp_path / "payload.json"
-        content = {"subject": "synthetic private content", "scheduled_at": "2030-01-12T13:55:00+00:00"}
-        payload.write_text(json.dumps(content))
-        now = [instant("2030-01-12T13:53:50")]
-        attempts = []
-        def post(*args, **kwargs):
-            attempts.append(kwargs["data"])
-            return type("Response", (), {"status_code": 503})()
-        def sleep(seconds):
-            now[0] += dt.timedelta(seconds=seconds)
-        assert not send.send_payload(payload, "synthetic", "synthetic", clock=lambda: now[0], sleep=sleep, post=post)
-        assert len(attempts) == 1
-        assert attempts[0] == payload.read_bytes()
-
-    def test_concurrent_conflict_retries_but_other_conflicts_fail(self, tmp_path, capsys):
-        import ip_send as send
-        payload = tmp_path / "payload.json"
-        payload.write_text('{"subject":"private synthetic content"}')
-        class Response:
-            def __init__(self, status, name):
-                self.status_code, self.name = status, name
-            def json(self):
-                return {"name": self.name, "private": "must never log this"}
-        responses = [Response(409, "concurrent_idempotent_requests"), Response(200, "accepted")]
-        sent = []
-        def post(*args, **kw):
-            sent.append(kw["data"])
-            return responses.pop(0)
-        assert send.send_payload(payload, "synthetic", "synthetic", post=post, sleep=lambda _: None)
-        assert sent == [payload.read_bytes(), payload.read_bytes()]
-        assert not send.send_payload(payload, "synthetic", "synthetic", post=lambda *a, **k: Response(409, "invalid_idempotent_request"))
-        logged = capsys.readouterr()
-        assert "private" not in logged.out + logged.err
-
-    def test_test_schedule_is_manual_pt_only(self):
-        from ip_editions import get_edition
-        from ip_send import scheduled_time
-        now = instant("2030-01-12T20:00")
-        assert scheduled_time(dt.date(2030, 1, 12), get_edition("pt"), {}, now,
-                              event="workflow_dispatch", schedule_in_min=3) == instant("2030-01-12T20:03")
-        for event, edition in (("schedule", "pt"), ("workflow_dispatch", "ist")):
-            with pytest.raises(ValueError):
-                scheduled_time(dt.date(2030, 1, 12), get_edition(edition), {}, now,
-                               event=event, schedule_in_min=3)
 
     def test_absolute_deadline_caps_poll_wait_and_network_timeout(self, monkeypatch):
         import ip_fetch as fetch
@@ -200,9 +119,10 @@ class TestEditionDelivery:
         assert delivery_mode("workflow_dispatch", recovery=True, force=False) == "real"
         assert delivery_mode("workflow_dispatch", recovery=True, force=True) == "forced"
         assert delivery_mode("workflow_dispatch", recovery=False, force=False) == "test"
-        assert delivery_step(edition, day, "forced") == "Forced send for 2030-01-12"
-        assert delivery_step(edition, day, "test") == "Test send for 2030-01-12"
-        assert delivery_step(edition, day, "real") == ("Deliver for 2030-01-12" if edition == "pt" else "Deliver IST for 2030-01-12")
+        label = edition.upper()
+        assert delivery_step(edition, day, "forced") == f"Forced send install paid {label} for 2030-01-12"
+        assert delivery_step(edition, day, "test") == f"Test send install paid {label} for 2030-01-12"
+        assert delivery_step(edition, day, "real") == ("Deliver install paid PT for 2030-01-12" if edition == "pt" else "Deliver install paid IST for 2030-01-12")
 
     def test_workflow_settings_resolve_edition_from_cron_and_ignore_manual_flags(self, monkeypatch, capsys):
         import ip_workflow as workflow
@@ -210,13 +130,12 @@ class TestEditionDelivery:
         monkeypatch.setenv("SCHEDULE", "7 13 * * *")
         monkeypatch.setenv("INPUT_EDITION", "pt")
         monkeypatch.setenv("FORCE_RESEND", "true")
-        monkeypatch.setenv("SCHEDULE_IN_MIN", "3")
         monkeypatch.setenv("NOW", "2030-01-11T13:07:00+00:00")
         assert workflow.main(["settings"]) == 0
         logged = capsys.readouterr().out
         assert "edition=ist\n" in logged and "timezone=Asia/Kolkata\n" in logged
         assert "report_date=2030-01-12\n" in logged
-        assert "mode=real\n" in logged and "schedule_in_min=0\n" in logged
+        assert "mode=real\n" in logged
 
     def test_workflow_manual_latest_ready_date_is_local(self, monkeypatch, capsys):
         import ip_workflow as workflow
@@ -239,13 +158,12 @@ class TestEditionDelivery:
         assert "IST edition for 2030-01-12" in text
         assert "edition=ist, report_date=2030-01-12, recovery ✓" in text
 
-    @pytest.mark.parametrize("bad_input,value", [("SCHEDULE_IN_MIN", "1.5"), ("INPUT_DATE", "invalid")])
-    def test_failure_notification_survives_bad_manual_inputs(self, bad_input, value, monkeypatch, capsys):
+    def test_failure_notification_survives_a_bad_manual_date(self, monkeypatch, capsys):
         import ip_workflow as workflow
         monkeypatch.setenv("EVENT", "workflow_dispatch")
         monkeypatch.setenv("INPUT_EDITION", "pt")
         monkeypatch.setenv("NOW", "2030-01-12T14:00:00+00:00")
-        monkeypatch.setenv(bad_input, value)
+        monkeypatch.setenv("INPUT_DATE", "invalid")
         assert workflow.main(["failure-message"]) == 0
         assert "PT edition for 2030-01-12" in capsys.readouterr().out
 
@@ -351,15 +269,3 @@ class TestEditionDelivery:
         assert workflow.main(["dedupe"]) == 0
         assert checked == []
         assert capsys.readouterr().out == "sent=False\n"
-
-    def test_one_minute_test_is_rejected_before_build_or_payload(self, monkeypatch, tmp_path, capsys):
-        import ip_workflow as workflow
-        import ip_send as sender
-        monkeypatch.setenv("EVENT", "workflow_dispatch")
-        monkeypatch.setenv("INPUT_EDITION", "pt")
-        monkeypatch.setenv("SCHEDULE_IN_MIN", "1")
-        assert workflow.main(["settings"]) == 2
-        monkeypatch.setenv("RESEND_API_KEY", "synthetic")
-        assert sender.main(["--edition", "pt", "--event", "workflow_dispatch", "--run-id", "synthetic",
-                            "--report-date", "2030-01-12", "--out", str(tmp_path), "--schedule-in-min", "1"]) == 2
-        assert not list(tmp_path.iterdir())

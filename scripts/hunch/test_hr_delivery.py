@@ -20,6 +20,13 @@ def workflow():
     return importlib.import_module("hr_workflow")
 
 
+@pytest.fixture(autouse=True)
+def fresh_main_run(monkeypatch):
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
+    monkeypatch.setenv("RUN_CREATED_AT", "2099-01-01T00:00:00Z")
+
+
 def write_email(path, subject="TreasureHunch retention"):
     (path / "email.json").write_text(json.dumps({
         "subject": subject, "html": "<p>private-metric-value</p>",
@@ -46,30 +53,52 @@ def test_manual_test_can_override_the_recipient():
     assert sender().recipient("workflow_dispatch", False, "someone@example.com") == "someone@example.com"
 
 
-@pytest.mark.parametrize("now,want", [
-    ("2026-11-19T13:52:59+00:00", "2026-11-19T13:55:00+00:00"),
-    ("2026-11-19T13:53:00+00:00", "2026-11-19T13:55:00+00:00"),
-    ("2026-11-19T13:53:01+00:00", None),
-])
-def test_send_schedule_switches_to_immediate_after_0553(now, want):
-    value = sender().scheduled_time(REPORT_DATE, dt.datetime.fromisoformat(now))
-    assert (value.isoformat() if value else None) == want
-
-
-def test_freeze_preserves_payload_bytes_and_schedule_on_retry(tmp_path):
-    s = sender()
+def test_no_scheduled_at_in_payload(tmp_path):
     write_email(tmp_path)
-    path = s.freeze_payload(tmp_path, REPORT_DATE, "12345", "schedule",
-                            now=lambda: dt.datetime(2026, 11, 19, 13, 52, tzinfo=UTC))
-    frozen = path.read_bytes()
-    body = json.loads(frozen)
+    body = sender().build_payload(tmp_path, REPORT_DATE, "12345", "schedule")
+    assert "scheduled_at" not in body
     assert body["from"] == "Lascade Games <noreply@metrics.lascade.com>"
     assert body["to"] == [sender().TO]
-    assert body["scheduled_at"] == "2026-11-19T13:55:00+00:00"
+    assert set(body) == {"from", "to", "subject", "html", "text"}
+
+
+def test_hunch_key_scheduled_and_manual():
+    s = sender()
+    assert s.send_key(REPORT_DATE, "schedule", "9") == "hunch-retention-2026-11-19"
+    assert s.send_key(REPORT_DATE, "workflow_dispatch", "9") == "hunch-retention-2026-11-19-manual-9"
+    assert s.send_key(REPORT_DATE, "workflow_dispatch", "9", recovery=True) == "hunch-retention-2026-11-19"
+
+
+def test_cli_freezes_then_sends_the_same_envelope_with_the_old_key(tmp_path, monkeypatch):
+    s = sender()
+    write_email(tmp_path)
+    monkeypatch.setenv("RESEND_API_KEY", "synthetic")
+    sent = []
+    monkeypatch.setattr(s.delivery, "send_frozen", lambda path, api_key: sent.append((path, api_key)) or {"accepted": True})
+    assert s.main(["--report-date", "2026-11-19", "--event", "schedule", "--run-id", "12345",
+                   "--out", str(tmp_path)]) == 0
+    (path, api_key), = sent
+    envelope = json.loads(Path(path).read_text())
+    assert envelope["key"] == "hunch-retention-2026-11-19" and api_key == "synthetic"
+    assert "scheduled_at" not in envelope["body"]
     write_email(tmp_path, subject="Changed")
-    again = s.freeze_payload(tmp_path, REPORT_DATE, "12345", "schedule",
-                             now=lambda: dt.datetime(2026, 11, 19, 14, 0, tzinfo=UTC))
-    assert again.read_bytes() == frozen
+    assert s.main(["--report-date", "2026-11-19", "--event", "schedule", "--run-id", "12345",
+                   "--out", str(tmp_path)]) == 0
+    assert json.loads(Path(path).read_text())["body"] == envelope["body"]
+
+
+def test_cli_failure_is_generic(tmp_path, monkeypatch, capsys):
+    s = sender()
+    write_email(tmp_path)
+    monkeypatch.setenv("RESEND_API_KEY", "synthetic")
+
+    def refuse(path, api_key):
+        raise s.delivery.DeliveryError("Resend delivery failed: HTTP 400 (HTTP error)")
+
+    monkeypatch.setattr(s.delivery, "send_frozen", refuse)
+    assert s.main(["--report-date", "2026-11-19", "--event", "schedule", "--run-id", "1",
+                   "--out", str(tmp_path)]) == 1
+    assert "private" not in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("subject,want", [
@@ -79,108 +108,17 @@ def test_freeze_preserves_payload_bytes_and_schedule_on_retry(tmp_path):
 def test_manual_payload_always_has_one_test_prefix(tmp_path, monkeypatch, subject, want):
     write_email(tmp_path, subject=subject)
     monkeypatch.setenv("HR_TEST_NUMBER", "7")
-    path = sender().freeze_payload(tmp_path, REPORT_DATE, "12345", "workflow_dispatch",
-                                   to="someone@example.com",
-                                   now=lambda: dt.datetime(2026, 11, 19, 14, 0, tzinfo=UTC))
-    body = json.loads(path.read_bytes())
+    body = sender().build_payload(tmp_path, REPORT_DATE, "12345", "workflow_dispatch",
+                                  to="someone@example.com")
     assert body["subject"] == want
     assert body["to"] == ["someone@example.com"]
     assert "scheduled_at" not in body
 
 
-def test_frozen_payload_cannot_silently_change_recipients(tmp_path):
-    write_email(tmp_path)
-    sender().freeze_payload(tmp_path, REPORT_DATE, "12345", "workflow_dispatch",
-                            to="someone@example.com")
-    with pytest.raises(ValueError):
-        sender().freeze_payload(tmp_path, REPORT_DATE, "12345", "workflow_dispatch",
-                                to="another@example.com")
-
-
-class Response:
-    def __init__(self, status, body):
-        self.status_code = status
-        self.body = body
-
-    def json(self):
-        return self.body
-
-
-def payload(tmp_path, scheduled=False):
-    path = tmp_path / "payload.json"
-    body = {"subject": "private-metric-value", "html": "private-metric-value"}
-    if scheduled:
-        body["scheduled_at"] = "2026-11-19T13:55:00+00:00"
-    path.write_text(json.dumps(body))
-    return path
-
-
-def test_concurrent_409_retries_identical_bytes_and_key(tmp_path, capsys):
-    path = payload(tmp_path)
-    sent = []
-    responses = iter([
-        Response(409, {"name": "concurrent_idempotent_requests", "message": "private-metric-value"}),
-        Response(200, {"id": "private-id"}),
-    ])
-    delays = []
-
-    def post(url, **kwargs):
-        sent.append((url, kwargs["data"], kwargs["headers"]["Idempotency-Key"]))
-        return next(responses)
-
-    assert sender().send_payload(path, "frozen-key", "secret", post=post, sleep=delays.append)
-    assert sent == [("https://api.resend.com/emails", path.read_bytes(), "frozen-key")] * 2
-    assert delays == [10]
-    captured = capsys.readouterr()
-    assert "private" not in captured.out + captured.err
-    assert all(len(line.split()) == 1 for line in (captured.out + captured.err).splitlines())
-
-
-@pytest.mark.parametrize("status,body", [
-    (409, {"name": "invalid_idempotent_request", "message": "private-metric-value"}),
-    (201, {"id": "private-id"}),
-    (202, {"id": "private-id"}),
-])
-def test_only_200_is_accepted_and_key_reuse_conflict_is_terminal(tmp_path, status, body):
-    calls = []
-
-    def post(url, **kwargs):
-        calls.append(url)
-        return Response(status, body)
-
-    assert not sender().send_payload(payload(tmp_path), "key", "secret", post=post,
-                                     sleep=lambda seconds: pytest.fail("unexpected-retry"))
-    assert len(calls) == 1
-
-
-def test_network_failure_retries_without_changing_payload(tmp_path):
-    path = payload(tmp_path)
-    received = []
-    delays = []
-
-    def post(url, **kwargs):
-        received.append(kwargs["data"])
-        if len(received) == 1:
-            raise requests.Timeout("private-network-body")
-        return Response(200, {"id": "accepted"})
-
-    assert sender().send_payload(path, "key", "secret", post=post, sleep=delays.append)
-    assert received == [path.read_bytes(), path.read_bytes()]
-    assert delays == [15]
-
-
-def test_scheduled_retry_stops_before_submission_window_closes(tmp_path):
-    assert not sender().send_payload(
-        payload(tmp_path, scheduled=True), "key", "secret",
-        clock=lambda: dt.datetime(2026, 11, 19, 13, 54, 1, tzinfo=UTC),
-        post=lambda *a, **kw: pytest.fail("late-scheduled-send"),
-    )
-
-
 @pytest.mark.parametrize("event,recovery,want", [
-    ("schedule", False, "Deliver for 2026-11-19"),
-    ("workflow_dispatch", True, "Deliver for 2026-11-19"),
-    ("workflow_dispatch", False, "Test send for 2026-11-19"),
+    ("schedule", False, "Deliver hunch retention for 2026-11-19"),
+    ("workflow_dispatch", True, "Deliver hunch retention for 2026-11-19"),
+    ("workflow_dispatch", False, "Test send hunch retention for 2026-11-19"),
 ])
 def test_delivery_step_records_only_real_sends(event, recovery, want):
     w = workflow()
@@ -212,7 +150,7 @@ def test_settings_write_outputs_without_logging_dates(tmp_path, monkeypatch, cap
     assert workflow().main(["settings"]) == 0
     outputs = dict(line.split("=", 1) for line in output.read_text().splitlines())
     assert outputs["report_date"] == "2026-11-19"
-    assert outputs["send_step"] == "Deliver for 2026-11-19"
+    assert outputs["send_step"] == "Deliver hunch retention for 2026-11-19"
     assert capsys.readouterr().out == "settings-ok\n"
 
 
@@ -230,7 +168,7 @@ def test_dedupe_uses_bare_delivery_prefix_and_skips_already_sent(tmp_path, monke
 
     monkeypatch.setattr(w.G, "already_sent", already_sent)
     assert w.main(["dedupe"]) == 0
-    assert history == [(REPORT_DATE, {"workflow": "daily-hunch-retention.yml", "sent_step": "Deliver for "})]
+    assert history == [(REPORT_DATE, {"workflow": "daily-hunch-retention.yml", "sent_step": "Deliver hunch retention for "})]
     assert (tmp_path / "outputs").read_text() == "sent=True\n"
 
 
@@ -248,3 +186,30 @@ def test_history_unavailable_refuses_recovery(tmp_path, monkeypatch, capsys):
     assert w.main(["dedupe"]) == 3
     assert not (tmp_path / "outputs").exists()
     assert capsys.readouterr().err == "history-unavailable\n"
+
+
+@pytest.mark.parametrize("env,code", [
+    ({"GITHUB_REF": "refs/heads/feature"}, 2),
+    ({"GITHUB_RUN_ATTEMPT": "2"}, 2),
+])
+def test_real_recovery_settings_refuse_a_branch_or_a_rerun(tmp_path, monkeypatch, env, code):
+    monkeypatch.setenv("EVENT", "workflow_dispatch")
+    monkeypatch.setenv("INPUT_DATE", "2026-11-19")
+    monkeypatch.setenv("RECOVERY", "true")
+    monkeypatch.setenv("NOW", "2026-11-19T14:00:00+00:00")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    assert workflow().main(["settings"]) == code
+    assert not (tmp_path / "out").exists()
+
+
+def test_failure_notify_command_uses_notify(monkeypatch):
+    import notify
+    sent = []
+    monkeypatch.setattr(notify, "telegram_send", lambda token, chat, text: sent.append((token, chat, text)))
+    for key, value in (("EVENT", "workflow_dispatch"), ("REPORT_DATE", "2026-11-19"), ("TOKEN", "t"),
+                       ("CHAT", "c"), ("RUN_URL", "https://example.invalid/run")):
+        monkeypatch.setenv(key, value)
+    assert workflow().main(["notify"]) == 0
+    assert sent == [("t", "c", "TreasureHunch retention for 2026-11-19 failed. Run: https://example.invalid/run")]
