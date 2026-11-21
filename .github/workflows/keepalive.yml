@@ -1,0 +1,47 @@
+name: Keep schedules alive
+
+# GitHub disables scheduled workflows in a public repo after 60 days without repository
+# activity. Re-enabling every workflow with a `schedule:` trigger each week resets that timer.
+# The list comes from the checkout, so a new scheduled workflow is covered without an edit here
+# (scripts/common/test_keepalive_workflow.py checks it).
+on:
+  schedule:
+    - cron: '37 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: seal-bash-e {0}
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: .github/workflows
+      # One failed call does not skip the rest; the job fails at the end.
+      - name: Re-enable every scheduled workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rc=0
+          for f in $(grep -lE '^  schedule:' .github/workflows/*.yml); do
+            gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/${f##*/}/enable" || rc=1
+          done
+          exit "$rc"
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1

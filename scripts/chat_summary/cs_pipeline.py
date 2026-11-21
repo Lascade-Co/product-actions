@@ -116,11 +116,12 @@ def _wait_for_tab(sheets, sheet_id, tab, deadline, now, sleep, log):
         props = next((p for p in sheets.tabs(sheet_id) if p.get("title") == tab), None)
         if props is not None:
             return props
-        if end is None or now() >= end:
+        current = now()  # one reading per poll, so the sleep can never be negative
+        if end is None or current >= end:
             raise DigestError("Source tab unavailable at deadline")
         attempts += 1
         log(f"Waiting for source tab; attempts={attempts}")
-        sleep(min(60, (end - now()).total_seconds()))
+        sleep(max(0, min(60, (end - current).total_seconds())))
 
 
 def _saved_items(rows, sentiment_index, base_url):

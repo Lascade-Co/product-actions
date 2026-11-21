@@ -43,6 +43,9 @@ class TestDailyWorkflow:
         send = next(i for i, step in enumerate(DAILY["jobs"]["email"]["steps"]) if "ip_send.py" in step.get("run", ""))
         assert build < hold < dedupe < send
         run = DAILY["jobs"]["email"]["steps"][hold]["run"]
+        # Manual test, recovery and forced sends go out at once; only the cron run holds.
+        assert DAILY["jobs"]["email"]["steps"][hold]["if"] == (
+            "${{ github.event_name == 'schedule' && steps.dates.outputs.mode == 'real' }}")
         assert 'python3 scripts/common/hold.py --report-date "$REPORT_DATE" --tz "$ZONE" --target 05:55' in run
 
     def test_deliver_steps_use_the_new_labels(self):

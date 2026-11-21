@@ -242,20 +242,3 @@ jobs:
         run: echo "All product deliveries confirmed."
       - if: always()
         uses: Lascade-Co/actions/actions/seal-upload@seal-v1
-
-  # GitHub disables scheduled workflows in public repos after 60 days without
-  # commits. Re-enabling it on every run resets that timer.
-  keepalive:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - name: Seal job output
-        uses: Lascade-Co/actions/actions/seal@seal-v1
-      - run: gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/chat-summary.yml/enable"
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - if: always()
-        uses: Lascade-Co/actions/actions/seal-upload@seal-v1

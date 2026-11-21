@@ -207,6 +207,22 @@ def test_missing_tab_fails_at_the_deadline_and_manual_fails_immediately(tmp_path
     assert f.listing() == []
 
 
+def test_wait_for_tab_never_sleeps_a_negative_interval():
+    # The clock passes the deadline between the deadline check and the sleep calculation.
+    end = datetime(2026, 10, 21, 12, 6, tzinfo=timezone.utc)
+    clock = iter([end - timedelta(seconds=1), end + timedelta(seconds=5), end + timedelta(seconds=6)])
+    sleeps = []
+
+    class Sheets:
+        def tabs(self, sheet_id):
+            return []
+
+    with pytest.raises(DigestError, match="^Source tab unavailable at deadline$"):
+        cs_pipeline._wait_for_tab(Sheets(), "sheet", "tab", "2026-10-21T12:06:00Z", lambda: next(clock),
+                                  sleeps.append, lambda message: None)
+    assert sleeps and all(seconds >= 0 for seconds in sleeps)
+
+
 @pytest.mark.parametrize("deadline", ["2026-10-21T12:40:00", "PRIVATE"])
 def test_tab_deadline_needs_an_explicit_timezone(tmp_path, deadline):
     f = Fixture(tmp_path, TAB_DEADLINE=deadline)

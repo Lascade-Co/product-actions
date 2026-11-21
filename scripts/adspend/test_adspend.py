@@ -321,7 +321,9 @@ def test_render_variants_and_stability():
     assert r.render(model, "A", [], APPS)[2] == ha                     # byte-stable
     assert "Spend was steady." in hb and pb == "Spend was steady."
     for h in (ha, hb):
-        assert "github.com/Lascade-Co/actions/actions/runs" not in h and "run_id" not in h
+        assert "/actions/runs" not in h and "run_id" not in h
+        assert "https://github.com/Lascade-Co/product-actions/actions/workflows/daily-ad-spend.yml" in h
+        assert "Lascade-Co/actions/" not in h
         assert "#c0392b" not in h and "#27ae60" not in h              # no verdict colours
     assert "Travel Animator" in ta and "Marine Radar" in ta 
     assert "AED" not in ha + hb + ta + tb and "All figures in US dollars." in ha
@@ -836,8 +838,10 @@ def test_render_without_changes_is_byte_stable():
     import hashlib
     # Re-baselined 2026-10-11 for the fixed product order (only change for this fixture:
     # Unattributed moved after Marine Radar; verified by diffing the text output).
-    want = {"A": "ca50b252087e64100cd7392c48d3d9a2de52ded2934bc76286f19fb173a6973d",
-            "B": "69644beae2125ab209483f6575b548cb495d832c4a1245fea515fbd024f76146"}
+    # Re-baselined 2026-11-21: the footer link moved to Lascade-Co/product-actions (the old URL
+    # still reproduces ca50b252… and 69644bea…).
+    want = {"A": "ee058322aa97fe1a82b728d0a9a48570a9882f525fec7723831084dea3897f6e",
+            "B": "e249f1e45693f8401339ccb87ee13056c811e516bc72a9f7c93ece4b478d032e"}
     for v, sent in (("A", []), ("B", ["Spend was steady."])):
         out = _render(full_model(), v, sent, APPS)
         assert hashlib.sha256("\x00".join(out).encode()).hexdigest() == want[v], v
@@ -1388,3 +1392,7 @@ if __name__ == "__main__":
         if name.startswith("test_"):
             fn()
     print("ok")
+
+
+def test_footer_links_point_at_product_actions():
+    assert r.WORKFLOW_URL == "https://github.com/Lascade-Co/product-actions/actions/workflows/daily-ad-spend.yml"

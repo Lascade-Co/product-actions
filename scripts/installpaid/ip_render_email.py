@@ -30,7 +30,7 @@ C_AUG, C_MAR = "#9a6a10", "#444444"
 INK, CTX = "#222222", "#66615a"
 T_BETTER, T_WORSE, T_LEVEL = "#1e7a3c", "#b0392c", "#1f6aa5"
 TRACK_BG = "#ebe8e4"
-WORKFLOW_URL = "https://github.com/Lascade-Co/actions/actions/workflows/daily-install-paid.yml"
+WORKFLOW_URL = "https://github.com/Lascade-Co/product-actions/actions/workflows/daily-install-paid.yml"
 STEP_NAMES = {"pw": "Saw the paywall", "pv": "Previewed a trip", "ex": "Exported a video", "paid": "Paid",
               "pc": "Paid, in-app event †"}
 

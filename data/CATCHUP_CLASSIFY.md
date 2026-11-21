@@ -1,6 +1,6 @@
 # Claude Commit-Classification Prompt
 
-This file is fetched verbatim by `Lascade-Co/actions/.github/workflows/daily-catchup.yml`.
+This file is read verbatim from the checkout by `Lascade-Co/product-actions/.github/workflows/daily-catchup.yml`.
 The workflow appends a JSON array of commits and sends the prompt to the Claude API.
 
 ## Role

@@ -55,6 +55,17 @@ jobs:
     steps:
       - name: Seal job output
         uses: Lascade-Co/actions/actions/seal@seal-v1
+      # Reads the event file, so a test address is masked before any later step could print it.
+      - name: Mask test recipient
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          to = (json.load(open(os.environ["GITHUB_EVENT_PATH"])).get("inputs") or {}).get("to") or ""
+          # Mask every address on its own line; workflow commands cannot carry a raw CR or LF.
+          for part in {to.strip(), *(p.strip() for p in re.split(r"[,;\r\n]+", to))}:
+              if part and "\n" not in part and "\r" not in part:
+                  print("::add-mask::" + part.replace("%", "%25"))
+          PY
       - name: Check out scripts
         uses: actions/checkout@v7
         with:
@@ -68,9 +79,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           RECOVERY: ${{ inputs.recovery }}
-          TEST_TO: ${{ inputs.to }}
           DRY_RUN: ${{ inputs.dry_run }}
-        run: python3 scripts/catchup/catchup_settings.py settings
+          VARIANTS: ${{ inputs.variants || 'A' }}
+        run: python3 scripts/catchup/catchup_settings.py settings --variants "$VARIANTS"
       - if: always()
         uses: Lascade-Co/actions/actions/seal-upload@seal-v1
 
@@ -137,11 +148,23 @@ jobs:
     env:
       VARIANTS: ${{ inputs.variants || 'A' }}
       REPORT_DATE: ${{ needs.gate2.outputs.report_date }}
-      # Scheduled sends go to everyone below; a test send goes to the `to` input.
-      MAIL_TO: ${{ inputs.to || 'cherian@lascade.com, Jishnu M M <jishnu@lascade.com>' }}
+      # Scheduled sends go to everyone below (its sha1 is part of the Resend key, keep it byte-identical).
+      # A test send reads the `to` input from the event file and passes it with --mail-to.
+      MAIL_TO: 'cherian@lascade.com, Jishnu M M <jishnu@lascade.com>'
     steps:
       - name: Seal job output
         uses: Lascade-Co/actions/actions/seal@seal-v1
+      # Reads the event file, so a test address is masked before any later step could print it.
+      - name: Mask test recipient
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          to = (json.load(open(os.environ["GITHUB_EVENT_PATH"])).get("inputs") or {}).get("to") or ""
+          # Mask every address on its own line; workflow commands cannot carry a raw CR or LF.
+          for part in {to.strip(), *(p.strip() for p in re.split(r"[,;\r\n]+", to))}:
+              if part and "\n" not in part and "\r" not in part:
+                  print("::add-mask::" + part.replace("%", "%25"))
+          PY
       - name: Check out scripts
         uses: actions/checkout@v7
         with:
@@ -206,7 +229,10 @@ jobs:
         if: ${{ !cancelled() && needs.settings.outputs.mode == 'test' && contains(env.VARIANTS, 'A') }}
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-        run: python3 scripts/adspend/adspend_send.py --variant A --ad-date "${{ steps.dates.outputs.ad_date }}"
+        run: |
+          TEST_TO=$(jq -r '.inputs.to // ""' "$GITHUB_EVENT_PATH")
+          test -n "$TEST_TO"
+          python3 scripts/adspend/adspend_send.py --variant A --ad-date "${{ steps.dates.outputs.ad_date }}" --mail-to "$TEST_TO"
 
       - name: Check ad spend A was not already delivered
         id: dedupeA
@@ -246,7 +272,10 @@ jobs:
         if: ${{ !cancelled() && needs.settings.outputs.mode == 'test' && contains(env.VARIANTS, 'B') }}
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-        run: python3 scripts/adspend/adspend_send.py --variant B --ad-date "${{ steps.dates.outputs.ad_date }}"
+        run: |
+          TEST_TO=$(jq -r '.inputs.to // ""' "$GITHUB_EVENT_PATH")
+          test -n "$TEST_TO"
+          python3 scripts/adspend/adspend_send.py --variant B --ad-date "${{ steps.dates.outputs.ad_date }}" --mail-to "$TEST_TO"
 
       - name: Check ad spend B was not already delivered
         id: dedupeB

@@ -46,6 +46,17 @@ jobs:
     steps:
       - name: Seal job output
         uses: Lascade-Co/actions/actions/seal@seal-v1
+      # Reads the event file, so a test address is masked before any later step could print it.
+      - name: Mask test recipient
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          to = (json.load(open(os.environ["GITHUB_EVENT_PATH"])).get("inputs") or {}).get("to") or ""
+          # Mask every address on its own line; workflow commands cannot carry a raw CR or LF.
+          for part in {to.strip(), *(p.strip() for p in re.split(r"[,;\r\n]+", to))}:
+              if part and "\n" not in part and "\r" not in part:
+                  print("::add-mask::" + part.replace("%", "%25"))
+          PY
       - name: Check out scripts
         uses: actions/checkout@v7
         with:
@@ -59,7 +70,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           RECOVERY: ${{ inputs.recovery }}
-          TEST_TO: ${{ inputs.to }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: python3 scripts/catchup/catchup_settings.py settings
       - if: always()
@@ -373,6 +383,17 @@ jobs:
     steps:
       - name: Seal job output
         uses: Lascade-Co/actions/actions/seal@seal-v1
+      # Reads the event file, so a test address is masked before any later step could print it.
+      - name: Mask test recipient
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          to = (json.load(open(os.environ["GITHUB_EVENT_PATH"])).get("inputs") or {}).get("to") or ""
+          # Mask every address on its own line; workflow commands cannot carry a raw CR or LF.
+          for part in {to.strip(), *(p.strip() for p in re.split(r"[,;\r\n]+", to))}:
+              if part and "\n" not in part and "\r" not in part:
+                  print("::add-mask::" + part.replace("%", "%25"))
+          PY
       - name: Check out scripts
         uses: actions/checkout@v7
         with:
@@ -451,10 +472,11 @@ jobs:
         if: steps.report.outputs.send == 'true' && needs.settings.outputs.mode == 'test'
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          TO: ${{ inputs.to }}
-        run: >-
-          python3 scripts/catchup/catchup_send.py --report-date "$REPORT_DATE"
-          --html email.html --subject email.subject --to "$TO"
+        run: |
+          TEST_TO=$(jq -r '.inputs.to // ""' "$GITHUB_EVENT_PATH")
+          test -n "$TEST_TO"
+          python3 scripts/catchup/catchup_send.py --report-date "$REPORT_DATE" \
+            --html email.html --subject email.subject --to "$TEST_TO"
 
       - name: Check catchup was not already delivered
         id: dedupe

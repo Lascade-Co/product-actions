@@ -642,3 +642,7 @@ def test_no_installs_on_the_latest_day(tmp_path):
     _, html, text, _ = R.render(m, "A", tmp_path)
     assert "No installs on Sun 18 Oct. The 7-day verdicts are above." in text
     assert "No installs on Sun 18 Oct. The 7-day verdicts are above." in html
+
+
+def test_footer_links_point_at_product_actions():
+    assert R.WORKFLOW_URL == "https://github.com/Lascade-Co/product-actions/actions/workflows/daily-install-paid.yml"

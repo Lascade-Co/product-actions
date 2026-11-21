@@ -178,20 +178,3 @@ jobs:
           python3 scripts/ta_trigger/ta_trigger.py deliver
       - if: always()
         uses: Lascade-Co/actions/actions/seal-upload@seal-v1
-
-  # GitHub disables scheduled workflows in public repos after 60 days without
-  # commits. Re-enabling it on every run resets that timer.
-  keepalive:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - name: Seal job output
-        uses: Lascade-Co/actions/actions/seal@seal-v1
-      - run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/ta-digest-trigger.yml/enable"
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - if: always()
-        uses: Lascade-Co/actions/actions/seal-upload@seal-v1

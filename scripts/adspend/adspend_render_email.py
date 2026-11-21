@@ -18,7 +18,7 @@ from adspend_model import DEADBAND_PCT, DEADBAND_USD, UNASSIGNED, round_pct, sub
 FONT_HEADING = "'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif"
 FONT_BODY = "'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif"
 ACCENT = "#2980b9"
-WORKFLOW_URL = "https://github.com/Lascade-Co/actions/actions/workflows/daily-ad-spend.yml"
+WORKFLOW_URL = "https://github.com/Lascade-Co/product-actions/actions/workflows/daily-ad-spend.yml"
 SUMMARY_MISSING = "Summary unavailable today."
 CHANGES_MISSING = "Change log unavailable today."
 CHANGES_NOTE = ("Changes are from the ad-account day and the day before, as logged by the ads team. "

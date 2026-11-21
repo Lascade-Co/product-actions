@@ -64,8 +64,9 @@ def test_triggers_keep_the_ist_cron_and_dispatch_inputs_without_a_pt_cron():
     assert set(ON) == {"schedule", "workflow_dispatch"}
 
 
-def test_jobs_are_gate_gate2_email_done_keepalive():
-    assert list(JOBS) == ["gate", "gate2", "email", "done", "keepalive"]
+def test_jobs_are_gate_gate2_email_done():
+    # The schedule is kept alive by keepalive.yml (scripts/common/test_keepalive_workflow.py).
+    assert list(JOBS) == ["gate", "gate2", "email", "done"]
 
 
 def test_every_job_is_sealed_first_and_last():
@@ -231,11 +232,3 @@ def test_sealed_preview_contains_only_the_selected_html_and_subject(tmp_path):
     assert result.returncode == 0, result.stderr
     assert args_file.read_text().split("\n")[:-1] == [
         "preview-travel-animator-pt", "out/travel-animator-pt.html", "out/travel-animator-pt.subject.txt"]
-
-
-def test_keepalive_reenables_the_schedule_with_least_privilege():
-    keepalive = JOBS["keepalive"]
-    assert keepalive["permissions"] == {"actions": "write", "contents": "read"}
-    run = next(s for s in keepalive["steps"] if "run" in s)
-    assert run["run"].strip() == 'gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/chat-summary.yml/enable"'
-    assert run["env"] == {"GH_TOKEN": "${{ github.token }}"}

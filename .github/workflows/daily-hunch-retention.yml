@@ -39,7 +39,6 @@ concurrency:
 env:
   EVENT: ${{ github.event_name }}
   INPUT_DATE: ${{ inputs.report_date }}
-  INPUT_TO: ${{ inputs.to || 'cherian@lascade.com' }}
   DRY_RUN: ${{ inputs.dry_run }}
   RECOVERY: ${{ inputs.recovery }}
   PYTHONPATH: ${{ github.workspace }}/scripts/common:${{ github.workspace }}/scripts/ai:${{ github.workspace }}/scripts/hunch
@@ -181,7 +180,7 @@ jobs:
           if-no-files-found: error
       # Lateness never fails delivery: a late build sends at once with the original date.
       - name: Hold until 05:55 Pacific
-        if: ${{ !inputs.dry_run }}
+        if: ${{ github.event_name == 'schedule' && steps.dates.outputs.mode == 'real' }}
         env:
           REPORT_DATE: ${{ steps.dates.outputs.report_date }}
         run: python3 scripts/common/hold.py --report-date "$REPORT_DATE" --tz America/Los_Angeles --target 05:55
@@ -199,10 +198,11 @@ jobs:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           REPORT_DATE: ${{ steps.dates.outputs.report_date }}
           MODE: ${{ steps.dates.outputs.mode }}
-          RECIPIENT: ${{ steps.dates.outputs.recipient }}
           RUN_ID: ${{ github.run_id }}
           HR_TEST_NUMBER: ${{ steps.dates.outputs.mode == 'test' && github.run_number || '' }}
+        # The recipient comes from the event file (masked by the settings step when it is a test address).
         run: |
+          RECIPIENT=$(python3 hr_workflow.py recipient)
           FLAGS=()
           if [ "$MODE" = real ] && [ "$EVENT" = workflow_dispatch ]; then FLAGS+=(--recovery); fi
           python3 hr_send.py --report-date "$REPORT_DATE" --event "$EVENT" --run-id "$RUN_ID" \

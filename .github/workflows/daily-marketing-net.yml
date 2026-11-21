@@ -56,7 +56,7 @@ jobs:
       - name: Install dependencies
         # Pinned: an unwatched daily cron whose crypto and HTTP stack must not
         # change under it. Resolved and test-verified on 2026-08-10.
-        run: pip install --quiet requests==2.34.2 pyjwt==2.13.0 cryptography==50.0.0 google-auth==2.56.3 pillow==12.3.0
+        run: pip install --quiet requests==2.34.2 pyjwt==2.13.0 cryptography==50.0.0 google-auth==2.63.0 pillow==12.3.0
 
       - name: Install the card font
         # The report is delivered as a rendered PNG, and Pillow needs a real

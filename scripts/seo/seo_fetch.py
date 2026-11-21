@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from seo_model import CmsPost, CmsSnapshot, Response, UrlStatus
 from seo_parse import parse_sitemap
 
-USER_AGENT = "Lascade-SEO-Audit/1.0 (+https://github.com/Lascade-Co/actions)"
+USER_AGENT = "Lascade-SEO-Audit/1.0 (+https://github.com/Lascade-Co/product-actions)"
 DIMENSION_RANGE = "bytes=0-4095"
 UNVERIFIED_STATUSES = frozenset({401, 403, 407, 429})
 HEAD_REJECTED_STATUSES = frozenset({400, 403, 405, 501})

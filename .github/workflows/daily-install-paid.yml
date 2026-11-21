@@ -193,9 +193,9 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       # Lateness never fails delivery: a late build sends at once with the original date.
-      # A forced send is explicit and goes out now.
+      # Manual test, recovery and forced sends go out now; only the cron run holds.
       - name: Hold until 05:55 local
-        if: ${{ !inputs.dry_run && steps.dates.outputs.mode != 'forced' }}
+        if: ${{ github.event_name == 'schedule' && steps.dates.outputs.mode == 'real' }}
         env:
           REPORT_DATE: ${{ steps.dates.outputs.report_date }}
           ZONE: ${{ steps.dates.outputs.timezone }}

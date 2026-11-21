@@ -40,6 +40,8 @@ def test_hold_is_between_build_and_dedupe_then_deliver():
     assert ('python3 scripts/common/hold.py --report-date "$REPORT_DATE" --tz America/Los_Angeles '
             '--target 05:55') in steps[hold]["run"]
     assert steps[send]["name"] == "${{ steps.dates.outputs.send_step }}"
+    # Manual test and recovery sends go out at once; only the cron run holds.
+    assert steps[hold]["if"] == "${{ github.event_name == 'schedule' && steps.dates.outputs.mode == 'real' }}"
 
 
 def test_no_scheduled_at_legacy_sender_catchup_or_inline_curl_alert():

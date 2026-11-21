@@ -49,3 +49,12 @@ Cross-repo reusable calls that pass secrets are listed in `.github/seal/env-exem
 3. Merge once `policy / policy` and `test` pass.
 4. Run the report's workflow with `workflow_dispatch` and `dry_run=true`, then open the preview at
    https://ci.lascade.com/?repo=product-actions.
+
+Workflows that use secrets run only from `main`. Their jobs declare the `production` environment,
+which accepts only `main`, so dispatching one from a branch fails by design (the job never starts).
+Branch runs and pull requests test with fixtures; preview a change after it merges, with a
+`dry_run=true` dispatch from `main` (or a test send where the report has one).
+
+`keepalive.yml` re-enables every workflow with a `schedule:` trigger each week, because GitHub
+disables schedules in a public repo after 60 days without activity. A new scheduled workflow is
+picked up from the checkout automatically.

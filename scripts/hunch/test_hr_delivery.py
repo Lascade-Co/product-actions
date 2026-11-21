@@ -213,3 +213,41 @@ def test_failure_notify_command_uses_notify(monkeypatch):
         monkeypatch.setenv(key, value)
     assert workflow().main(["notify"]) == 0
     assert sent == [("t", "c", "TreasureHunch retention for 2026-11-19 failed. Run: https://example.invalid/run")]
+
+
+def dispatch_event(tmp_path, monkeypatch, to, recovery=False):
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"inputs": {"to": to}}))
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event))
+    monkeypatch.setenv("EVENT", "workflow_dispatch")
+    monkeypatch.setenv("INPUT_DATE", "2026-11-19")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "outputs"))
+    if recovery:
+        monkeypatch.setenv("RECOVERY", "true")
+    else:
+        monkeypatch.delenv("RECOVERY", raising=False)
+
+
+def test_test_recipient_comes_from_the_event_file_and_is_masked(tmp_path, monkeypatch, capsys):
+    dispatch_event(tmp_path, monkeypatch, "tester@example.com")
+    assert workflow().main(["settings"]) == 0
+    assert capsys.readouterr().out == "::add-mask::tester@example.com\nsettings-ok\n"
+    outputs = dict(line.split("=", 1) for line in (tmp_path / "outputs").read_text().splitlines())
+    assert "recipient" not in outputs and "tester@example.com" not in (tmp_path / "outputs").read_text()
+    assert workflow().main(["recipient"]) == 0
+    assert capsys.readouterr().out == "tester@example.com\n"
+
+
+@pytest.mark.parametrize("to", ["", "cherian@lascade.com"])
+def test_default_recipient_is_public_and_not_masked(tmp_path, monkeypatch, capsys, to):
+    dispatch_event(tmp_path, monkeypatch, to)
+    assert workflow().main(["settings"]) == 0
+    assert capsys.readouterr().out == "settings-ok\n"
+    assert workflow().main(["recipient"]) == 0
+    assert capsys.readouterr().out == "cherian@lascade.com\n"
+
+
+def test_recovery_refuses_an_event_recipient_override(tmp_path, monkeypatch):
+    dispatch_event(tmp_path, monkeypatch, "tester@example.com", recovery=True)
+    assert workflow().main(["settings"]) == 2
+    assert workflow().main(["recipient"]) == 2

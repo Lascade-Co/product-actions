@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import os
 import re
 import sys
@@ -28,6 +29,21 @@ def delivery_step(date, mode):
     return workflow.step_name(LABEL, "", date, mode)
 
 
+def event_to():
+    """The workflow_dispatch `to` input, read from the event file so it never reaches a step header."""
+    path = os.environ.get("GITHUB_EVENT_PATH")
+    if not path:
+        return ""
+    with open(path, encoding="utf-8") as source:
+        return str((json.load(source).get("inputs") or {}).get("to") or "")
+
+
+def mask(to):
+    # The default recipient is public; a manual test address is masked for later steps of this job.
+    if to != TO:
+        print("::add-mask::" + to.replace("%", "%25"))
+
+
 def settings(notification=False):
     event = os.environ.get("EVENT", "schedule")
     mode = delivery_mode(event, os.environ.get("RECOVERY") == "true")
@@ -45,7 +61,7 @@ def settings(notification=False):
         date = G.plan(now, tz=PT, target=(5, 5))[0]
     elif date is None:
         date = latest
-    to = (os.environ.get("INPUT_TO") or TO) if not notification else TO
+    to = (event_to() or TO) if not notification else TO
     if (not re.fullmatch(r"[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+", to)
             or (mode != "test" and to != TO)):
         raise ValueError("invalid-recipient")
@@ -62,7 +78,7 @@ def emit(**values):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("settings", "dedupe", "failure-message", "notify"))
+    parser.add_argument("command", choices=("settings", "recipient", "dedupe", "failure-message", "notify"))
     args = parser.parse_args(argv)
     try:
         notification = args.command in ("failure-message", "notify")
@@ -80,6 +96,9 @@ def main(argv=None):
                     print("alert-failed", file=sys.stderr)
                     return 1
                 print("alert-sent")
+        elif args.command == "recipient":
+            # Captured by the send step's shell; never written to GITHUB_OUTPUT.
+            print(to)
         elif args.command == "dedupe":
             accepted = mode == "real" and G.already_sent(
                 date, G.now_utc(), workflow="daily-hunch-retention.yml", sent_step=SENT_STEP)
@@ -89,7 +108,8 @@ def main(argv=None):
             if mode == "real":
                 now = G.now_utc()
                 workflow.guard_real_run(dict(os.environ), date, dates.report_date_for(now, PT), now)
-            emit(report_date=date, mode=mode, recipient=to, send_step=delivery_step(date, mode))
+            mask(to)
+            emit(report_date=date, mode=mode, send_step=delivery_step(date, mode))
             print("settings-ok")
         return 0
     except G.DedupeUnavailable:
@@ -103,7 +123,7 @@ def main(argv=None):
     except workflow.SettingsError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    except (ValueError, KeyError):
+    except (ValueError, KeyError, OSError):
         print("settings-invalid", file=sys.stderr)
         return 2
 
