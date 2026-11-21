@@ -1,20 +1,15 @@
 """Rendering and delivery.
 
-Four ways this silently fails to send, each hit in practice: an unescaped
+Rendering only; Telegram transport (retries, token redaction) is notify.py.
+Three ways this silently failed to send, each hit in practice: an unescaped
 exception string ("400 can't parse entities" — nothing delivered, on exactly the
-day a source broke); a message over 4096 characters; a truncation landing
-mid-entity; and a leaked bot token in a log.
+day a source broke); a message over 4096 characters; and a truncation landing
+mid-entity.
 """
 
 from __future__ import annotations
 
-import json
-import time
-from decimal import Decimal
-from typing import Callable, Optional
-
-import requests
-
+from notify import escape
 from pnl_money import (
     Amount,
     SourceValue,
@@ -26,20 +21,6 @@ from pnl_money import (
 )
 
 _LIMIT = 4096
-_RETRIES = 3
-_TIMEOUT = 30
-
-class DeliveryError(RuntimeError):
-    pass
-
-
-def escape(text: str) -> str:
-    """Escape the three characters Telegram's HTML parser chokes on.
-
-    Ampersand first, or the escapes themselves get double-escaped. Quotes need
-    no handling: this text sits in element content, never in an attribute.
-    """
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def truncate(text: str, limit: int = _LIMIT) -> str:
@@ -62,10 +43,6 @@ def truncate(text: str, limit: int = _LIMIT) -> str:
     if not kept:
         return marker.lstrip("\n")
     return "\n".join(kept) + marker
-
-
-def redact(text: str, token: str) -> str:
-    return text.replace(token, "<redacted>") if token else text
 
 
 def _shown(value: SourceValue) -> str:
@@ -134,102 +111,3 @@ def render(report: dict) -> str:
         parts += [f"⚠️ {escape(w)}" for w in warnings]
 
     return truncate("\n".join(parts))
-
-
-def _deliver(token: str, method: str, call, sleep: Optional[Callable]) -> None:
-    """Retry ``call`` and raise ``DeliveryError`` if it never succeeds.
-
-    Shared so the photo and text paths cannot drift apart on retry count,
-    backoff, or — the one that matters — token redaction.
-    """
-    sleep = sleep or time.sleep  # injectable so the suite does not really wait
-    last = ""
-    for attempt in range(_RETRIES):
-        try:
-            response = call()
-            if getattr(response, "status_code", 0) == 200:
-                return
-            last = f"status {getattr(response, 'status_code', '?')}"
-        except Exception as exc:
-            last = redact(str(exc), token)
-        if attempt < _RETRIES - 1:
-            sleep(2 ** attempt)
-    raise DeliveryError(
-        redact(f"Telegram {method} failed after {_RETRIES} attempts: {last}", token)
-    )
-
-
-def send(
-    token: str,
-    chat_id: str,
-    html: str,
-    post: Optional[Callable] = None,
-    sleep: Optional[Callable] = None,
-) -> None:
-    post = post or requests.post
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    _deliver(
-        token,
-        "sendMessage",
-        lambda: post(
-            url,
-            json={"chat_id": chat_id, "text": html, "parse_mode": "HTML"},
-            timeout=_TIMEOUT,
-        ),
-        sleep,
-    )
-
-
-def send_photo(
-    token: str,
-    chat_id: str,
-    png: bytes,
-    post: Optional[Callable] = None,
-    sleep: Optional[Callable] = None,
-) -> None:
-    post = post or requests.post
-    url = f"https://api.telegram.org/bot{token}/sendPhoto"
-    _deliver(
-        token,
-        "sendPhoto",
-        lambda: post(
-            url,
-            data={"chat_id": chat_id},
-            files={"photo": ("marketing-net.png", png, "image/png")},
-            timeout=_TIMEOUT,
-        ),
-        sleep,
-    )
-
-
-def send_media_group(
-    token: str,
-    chat_id: str,
-    images: list[tuple[str, bytes]],
-    post: Optional[Callable] = None,
-    sleep: Optional[Callable] = None,
-) -> None:
-    """Send 2–10 PNGs as one Telegram album."""
-    if not 2 <= len(images) <= 10:
-        raise DeliveryError("Telegram sendMediaGroup requires 2–10 images")
-    post = post or requests.post
-    url = f"https://api.telegram.org/bot{token}/sendMediaGroup"
-    media = [
-        {"type": "photo", "media": f"attach://photo{index}"}
-        for index in range(len(images))
-    ]
-    files = {
-        f"photo{index}": (filename, png, "image/png")
-        for index, (filename, png) in enumerate(images)
-    }
-    _deliver(
-        token,
-        "sendMediaGroup",
-        lambda: post(
-            url,
-            data={"chat_id": chat_id, "media": json.dumps(media)},
-            files=files,
-            timeout=_TIMEOUT,
-        ),
-        sleep,
-    )

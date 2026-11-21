@@ -4,12 +4,8 @@ from decimal import Decimal
 
 from pnl_money import Amount, Unavailable
 from pnl_telegram import (
-    DeliveryError,
     escape,
-    redact,
     render,
-    send,
-    send_media_group,
     truncate,
 )
 
@@ -33,12 +29,6 @@ class TruncateTest(unittest.TestCase):
         self.assertTrue(result.startswith("line one"))
         self.assertNotIn("&am\n", result)
         self.assertLessEqual(len(result), 20)
-
-
-class RedactTest(unittest.TestCase):
-    def test_removes_the_bot_token(self):
-        message = "failed https://api.telegram.org/bot123:ABC/sendMessage"
-        self.assertNotIn("123:ABC", redact(message, "123:ABC"))
 
 
 class RenderTest(unittest.TestCase):
@@ -102,67 +92,6 @@ class RenderTest(unittest.TestCase):
         html = render(report)
         self.assertIn("vs Mar 1–10 · unavailable", html)
         self.assertNotIn("vs Mar 1–10 · $0", html)
-
-
-class SendTest(unittest.TestCase):
-    def test_raises_after_retries(self):
-        attempts = []
-
-        def post(url, json=None, timeout=None):
-            attempts.append(url)
-            raise OSError("connection reset")
-
-        with self.assertRaises(DeliveryError):
-            send("123:ABC", "-1", "<pre>x</pre>", post=post, sleep=lambda s: None)
-        self.assertEqual(len(attempts), 3)
-
-    def test_delivery_error_does_not_leak_the_token(self):
-        def post(url, json=None, timeout=None):
-            raise OSError("failed at https://api.telegram.org/bot123:ABC/sendMessage")
-
-        with self.assertRaises(DeliveryError) as caught:
-            send("123:ABC", "-1", "<pre>x</pre>", post=post, sleep=lambda s: None)
-        self.assertNotIn("123:ABC", str(caught.exception))
-
-    def test_succeeds_without_retrying(self):
-        class Ok:
-            status_code = 200
-
-        calls = []
-
-        def post(url, json=None, timeout=None):
-            calls.append(url)
-            return Ok()
-
-        send("123:ABC", "-1", "<pre>x</pre>", post=post)
-        self.assertEqual(len(calls), 1)
-
-    def test_sends_three_photos_as_one_media_group(self):
-        class Ok:
-            status_code = 200
-
-        captured = {}
-
-        def post(url, data=None, files=None, timeout=None):
-            captured.update(url=url, data=data, files=files, timeout=timeout)
-            return Ok()
-
-        send_media_group(
-            "123:ABC",
-            "-1",
-            [("summary.png", b"one"), ("line.png", b"two"), ("bar.png", b"three")],
-            post=post,
-        )
-        self.assertTrue(captured["url"].endswith("/sendMediaGroup"))
-        media = json.loads(captured["data"]["media"])
-        self.assertEqual([item["media"] for item in media], [
-            "attach://photo0", "attach://photo1", "attach://photo2"
-        ])
-        self.assertEqual(set(captured["files"]), {"photo0", "photo1", "photo2"})
-
-    def test_media_group_rejects_telegram_invalid_item_count(self):
-        with self.assertRaises(DeliveryError):
-            send_media_group("123:ABC", "-1", [("only.png", b"one")])
 
 
 class ReviewRegressionTest(unittest.TestCase):

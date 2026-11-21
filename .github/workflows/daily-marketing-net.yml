@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RAW: https://raw.githubusercontent.com/Lascade-Co/actions/main
+  PYTHONPATH: scripts/common:scripts/pnl
   # Hardcoded deliberately, and NOT named TELEGRAM_CHAT_ID: that key exists in
   # the pnl Infisical project for the PNL app's own alerting, and
   # export-type: env puts it in this job's environment.
@@ -37,12 +37,16 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Seal job output
-        shell: bash
-        run: |
-          u="https://raw.githubusercontent.com/Lascade-Co/actions/${{ github.workflow_sha }}/scripts/seal/install.sh"
-          curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 60 -o "$RUNNER_TEMP/seal-install.tmp" "$u"
-          test -s "$RUNNER_TEMP/seal-install.tmp" && mv "$RUNNER_TEMP/seal-install.tmp" "$RUNNER_TEMP/seal-install.sh"
-          SEAL_REF="${{ github.workflow_sha }}" bash "$RUNNER_TEMP/seal-install.sh"
+        uses: Lascade-Co/actions/actions/seal@seal-v1
+
+      - name: Check out scripts
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/common
+            scripts/pnl
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -72,14 +76,6 @@ jobs:
           secret-path: /
           export-type: env
 
-      - name: Download scripts
-        run: |
-          for module in pnl_money pnl_fx pnl_spend pnl_appstore pnl_playstore \
-                        pnl_googleads pnl_metaads pnl_benchmark pnl_image pnl_charts \
-                        pnl_telegram marketing_net; do
-            curl -fsSL --retry 3 --retry-delay 2 -o "$module.py" "$RAW/scripts/pnl/$module.py"
-          done
-
       - name: Restore the App Store day cache
         # A published day is immutable, so without this a run on the 28th
         # re-downloads 27 unchanging reports. Keyed per run so each saves a fresh
@@ -94,7 +90,7 @@ jobs:
         run: |
           ARGS=()
           if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS+=(--dry-run); fi
-          python3 marketing_net.py "${ARGS[@]}"
+          python3 scripts/pnl/marketing_net.py "${ARGS[@]}"
 
       - name: Seal the rendered card
         id: pack_1
@@ -111,11 +107,5 @@ jobs:
           retention-days: 7
           compression-level: 0
 
-      - name: Upload sealed log
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.SEAL_LOG_ARTIFACT }}
-          path: ${{ runner.temp }}/seal/out/
-          retention-days: 7
-          if-no-files-found: ignore
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1

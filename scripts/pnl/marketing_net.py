@@ -30,7 +30,8 @@ from pnl_money import Amount, SourceValue, Unavailable
 from pnl_playstore import fetch_playstore_daily
 from pnl_spend import fetch_head_spend, fetch_head_spend_daily
 from pnl_image import render_png
-from pnl_telegram import DeliveryError, render, send, send_media_group, send_photo
+from notify import NotifyError, telegram_send, telegram_send_media_group, telegram_send_photo
+from pnl_telegram import render
 
 PNL_BASE_URL = "https://pnl.lascade.com"
 # The normalized key, which contains a SPACE — PNL derives keys from card
@@ -231,12 +232,12 @@ def main(argv=None) -> int:
     try:
         album = [("marketing-net.png", png), *chart_images] if png else []
         if len(album) >= 2:
-            send_media_group(config["telegram_token"], config["chat_id"], album)
+            telegram_send_media_group(config["telegram_token"], config["chat_id"], album)
         elif png:
-            send_photo(config["telegram_token"], config["chat_id"], png)
+            telegram_send_photo(config["telegram_token"], config["chat_id"], png, filename="marketing-net.png")
         else:
-            send(config["telegram_token"], config["chat_id"], html)
-    except DeliveryError as exc:
+            telegram_send(config["telegram_token"], config["chat_id"], html, parse_mode="HTML")
+    except NotifyError as exc:
         # The only red condition: no message means no surface carrying the
         # warnings, so the workflow status is the sole remaining signal.
         print(str(exc), file=sys.stderr)

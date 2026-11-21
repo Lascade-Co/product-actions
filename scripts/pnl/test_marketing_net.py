@@ -127,3 +127,22 @@ class BuildReportTest(unittest.TestCase):
             self.sources(meta=lambda: Unavailable("expired")),
         )
         self.assertIsInstance(report["comparison"]["value"], Unavailable)
+
+
+class TransportTest(unittest.TestCase):
+    """Telegram transport lives in notify; pnl_telegram only renders."""
+
+    def test_marketing_net_sends_through_notify(self):
+        import marketing_net
+        import notify
+
+        self.assertIs(marketing_net.telegram_send, notify.telegram_send)
+        self.assertIs(marketing_net.telegram_send_photo, notify.telegram_send_photo)
+        self.assertIs(marketing_net.telegram_send_media_group, notify.telegram_send_media_group)
+        self.assertIs(marketing_net.NotifyError, notify.NotifyError)
+
+    def test_pnl_telegram_has_no_transport(self):
+        import pnl_telegram
+
+        for name in ("send", "send_photo", "send_media_group", "DeliveryError", "requests"):
+            self.assertFalse(hasattr(pnl_telegram, name), name)
