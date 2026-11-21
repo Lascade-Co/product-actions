@@ -15,8 +15,10 @@ on:
     # Daily at 06:00 UTC (10:00 Asia/Muscat)
     - cron: '0 6 * * *'
 
+permissions:
+  contents: read
+
 env:
-  RAW: https://raw.githubusercontent.com/Lascade-Co/actions/main
   TELEGRAM_CHAT_ID: '-5312322129'
 
 defaults:
@@ -30,39 +32,33 @@ jobs:
       sites: ${{ steps.list.outputs.sites }}
     steps:
       - name: Seal job output
-        shell: bash
-        run: |
-          u="https://raw.githubusercontent.com/Lascade-Co/actions/${{ github.workflow_sha }}/scripts/seal/install.sh"
-          curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 60 -o "$RUNNER_TEMP/seal-install.tmp" "$u"
-          test -s "$RUNNER_TEMP/seal-install.tmp" && mv "$RUNNER_TEMP/seal-install.tmp" "$RUNNER_TEMP/seal-install.sh"
-          SEAL_REF="${{ github.workflow_sha }}" bash "$RUNNER_TEMP/seal-install.sh"
+        uses: Lascade-Co/actions/actions/seal@seal-v1
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: data
 
       - name: Build the site matrix
         id: list
         env:
           ONLY: ${{ inputs.site }}
         run: |
-          curl -fsSL --retry 3 --retry-delay 2 -o seo_sites.json "$RAW/data/seo_sites.json"
           if [ -n "$ONLY" ]; then
-            SITES=$(jq -c --arg only "$ONLY" '[.[] | select(.name == $only) | .name]' seo_sites.json)
+            SITES=$(jq -c --arg only "$ONLY" '[.[] | select(.name == $only) | .name]' data/seo_sites.json)
           else
-            SITES=$(jq -c '[.[].name]' seo_sites.json)
+            SITES=$(jq -c '[.[].name]' data/seo_sites.json)
           fi
           if [ "$SITES" = "[]" ]; then
-            echo "No sites matched. Known: $(jq -r '[.[].name] | join(", ")' seo_sites.json)" >&2
+            echo "No sites matched. Known: $(jq -r '[.[].name] | join(", ")' data/seo_sites.json)" >&2
             exit 1
           fi
           echo "sites=$SITES" >> "$GITHUB_OUTPUT"
           echo "Matrix: $SITES"
 
-      - name: Upload sealed log
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.SEAL_LOG_ARTIFACT }}
-          path: ${{ runner.temp }}/seal/out/
-          retention-days: 7
-          if-no-files-found: ignore
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1
 
   audit:
     needs: discover
@@ -74,12 +70,7 @@ jobs:
         site: ${{ fromJSON(needs.discover.outputs.sites) }}
     steps:
       - name: Seal job output
-        shell: bash
-        run: |
-          u="https://raw.githubusercontent.com/Lascade-Co/actions/${{ github.workflow_sha }}/scripts/seal/install.sh"
-          curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 60 -o "$RUNNER_TEMP/seal-install.tmp" "$u"
-          test -s "$RUNNER_TEMP/seal-install.tmp" && mv "$RUNNER_TEMP/seal-install.tmp" "$RUNNER_TEMP/seal-install.sh"
-          SEAL_REF="${{ github.workflow_sha }}" bash "$RUNNER_TEMP/seal-install.sh"
+        uses: Lascade-Co/actions/actions/seal@seal-v1
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -92,28 +83,25 @@ jobs:
         # .venv at the time this wave landed.
         run: pip install --quiet requests==2.34.2 beautifulsoup4==4.15.0 lxml==6.1.1
 
-      - name: Download audit scripts
-        run: |
-          curl -fsSL --retry 3 --retry-delay 2 -o seo_sites.json      "$RAW/data/seo_sites.json"
-          curl -fsSL --retry 3 --retry-delay 2 -o seo_model.py        "$RAW/scripts/seo/seo_model.py"
-          curl -fsSL --retry 3 --retry-delay 2 -o seo_parse.py        "$RAW/scripts/seo/seo_parse.py"
-          curl -fsSL --retry 3 --retry-delay 2 -o seo_fetch.py        "$RAW/scripts/seo/seo_fetch.py"
-          curl -fsSL --retry 3 --retry-delay 2 -o seo_rulekit.py      "$RAW/scripts/seo/seo_rulekit.py"
-          curl -fsSL --retry 3 --retry-delay 2 -o seo_checks_abc.py   "$RAW/scripts/seo/seo_checks_abc.py"
-          curl -fsSL --retry 3 --retry-delay 2 -o seo_checks_def.py   "$RAW/scripts/seo/seo_checks_def.py"
-          curl -fsSL --retry 3 --retry-delay 2 -o seo_checks_ghi.py   "$RAW/scripts/seo/seo_checks_ghi.py"
-          curl -fsSL --retry 3 --retry-delay 2 -o seo_checks.py       "$RAW/scripts/seo/seo_checks.py"
-          curl -fsSL --retry 3 --retry-delay 2 -o seo_report.py       "$RAW/scripts/seo/seo_report.py"
-          curl -fsSL --retry 3 --retry-delay 2 -o seo_blog_audit.py   "$RAW/scripts/seo/seo_blog_audit.py"
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            data
+            scripts/common
+            scripts/seo
 
       - name: Run the SEO and contextual internal-link audit
         id: audit
         env:
           BLOG_COUNT: ${{ inputs.blog_count }}
+          TELEGRAM_TOKEN: ${{ secrets.SUBSCRIPTION_TELEGRAM_TOKEN }}
+          PYTHONPATH: scripts/common:scripts/seo
         run: |
-          ARGS=(--site "${{ matrix.site }}" --config seo_sites.json --output report.html)
+          ARGS=(--site "${{ matrix.site }}" --config data/seo_sites.json --output report.html --telegram-chat-id "$TELEGRAM_CHAT_ID")
           if [ -n "$BLOG_COUNT" ]; then ARGS+=(--blog-count "$BLOG_COUNT"); fi
-          python3 seo_blog_audit.py "${ARGS[@]}"
+          python3 scripts/seo/seo_blog_audit.py "${ARGS[@]}"
 
       - name: Seal report
         id: pack_1
@@ -130,25 +118,5 @@ jobs:
           retention-days: 7
           compression-level: 0
 
-      - name: Send report to Telegram
-        if: steps.audit.outputs.has_findings == 'true'
-        env:
-          TELEGRAM_TOKEN: ${{ secrets.SUBSCRIPTION_TELEGRAM_TOKEN }}
-          LABEL: ${{ steps.audit.outputs.label }}
-          ERRORS: ${{ steps.audit.outputs.error_count }}
-          WARNINGS: ${{ steps.audit.outputs.warn_count }}
-        run: |
-          curl -sf -X POST \
-            "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendDocument" \
-            -F chat_id="${TELEGRAM_CHAT_ID}" \
-            -F document=@report.html \
-            -F caption="Blog SEO Audit — ${LABEL}: ${ERRORS} errors, ${WARNINGS} warnings"
-
-      - name: Upload sealed log
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.SEAL_LOG_ARTIFACT }}
-          path: ${{ runner.temp }}/seal/out/
-          retention-days: 7
-          if-no-files-found: ignore
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1

@@ -24,6 +24,8 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
+import notify
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -702,6 +704,9 @@ def main():
     parser.add_argument("--zoom", type=int, default=8, help="VesselFinder zoom level (default: 8)")
     parser.add_argument("--output", default=None, help="Output HTML file path")
     parser.add_argument("--max-ships", type=int, default=200, help="Max Lascade API calls (default: 200)")
+    parser.add_argument("--telegram-chat-id", default=None,
+                        help="send the report to this Telegram chat (bot token from TELEGRAM_TOKEN)")
+    parser.add_argument("--caption", default=None, help="Telegram caption")
     args = parser.parse_args()
 
     gen_time = datetime.now(timezone.utc)
@@ -777,6 +782,12 @@ def main():
         f.write(html)
 
     print(f"Report written to {args.output}")
+
+    if args.telegram_chat_id:
+        notify.telegram_send_document(
+            os.environ["TELEGRAM_TOKEN"], args.telegram_chat_id, os.path.basename(args.output),
+            html.encode("utf-8"), args.caption)
+        print("Report sent to Telegram")
 
 
 if __name__ == "__main__":

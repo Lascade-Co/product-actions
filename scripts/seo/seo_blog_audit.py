@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
+import notify
 from seo_checks import ALL_RULES, BLOG_RULES, RULES_BY_ID, RUN_RULES
 from seo_fetch import Fetcher, RequestsTransport
 from seo_model import (
@@ -404,6 +405,8 @@ def main(argv=None) -> int:
     parser.add_argument("--config", default="seo_sites.json", help="path to seo_sites.json")
     parser.add_argument("--output", default="report.html", help="where to write the report")
     parser.add_argument("--blog-count", type=int, default=None, help="override how many blogs to audit")
+    parser.add_argument("--telegram-chat-id", default=None,
+                        help="send the report here when the gate fires (bot token from TELEGRAM_TOKEN)")
     parser.add_argument("--offline", default=None, help="serve responses from this fixture directory")
     try:
         args = parser.parse_args(argv)
@@ -473,6 +476,16 @@ def main(argv=None) -> int:
         f"{tally[SEVERITY_INFO]} info, {len(suppressed)} suppressed "
         f"across {len(summary.pages)} blogs → {args.output}"
     )
+
+    if args.telegram_chat_id and gate(summary):
+        try:
+            caption = (f"Blog SEO Audit — {summary.site.label}: "
+                       f"{tally[SEVERITY_ERROR]} errors, {tally[SEVERITY_WARN]} warnings")
+            notify.telegram_send_document(
+                os.environ["TELEGRAM_TOKEN"], args.telegram_chat_id, Path(args.output).name,
+                Path(args.output).read_bytes(), caption)
+        except Exception as exc:  # noqa: BLE001 — a failed send must not turn the run red (ADR 0003)
+            sys.stderr.write(f"::warning::report delivery failed: {exc}\n")
     return 0
 
 
