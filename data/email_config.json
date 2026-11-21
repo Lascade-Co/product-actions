@@ -1,0 +1,154 @@
+{
+  "_doc": "Digest names, recipients and modules. Editions use local 05:00 cutoffs and 05:55 delivery; cron triggers live in .github/workflows/daily-*.yml.",
+  "digests": {
+    "revenue": {
+      "sender": "MarineRadar",
+      "recipients": {
+        "ist": [
+          "angelrose@lascade.com",
+          "varsha@lascade.com"
+        ],
+        "pt": [
+          "cherian@lascade.com"
+        ]
+      },
+      "name": "MarineRadar web revenue",
+      "module": "revenue_main",
+      "extra_args": []
+    },
+    "reviews": {
+      "sender": "App Reviews",
+      "recipients": {
+        "ist": [
+          "angelrose@lascade.com",
+          "adarsh@lascade.com",
+          "fasna@lascade.com"
+        ],
+        "pt": [
+          "cherian@lascade.com"
+        ]
+      },
+      "name": "App reviews",
+      "module": "reviews_main",
+      "extra_args": [
+        "--apps",
+        "data/reviews_apps.json"
+      ]
+    },
+    "survey_marine": {
+      "sender": "MarineRadar",
+      "recipients": {
+        "ist": [
+          "angelrose@lascade.com",
+          "adarsh@lascade.com"
+        ],
+        "pt": [
+          "cherian@lascade.com"
+        ]
+      },
+      "name": "MarineRadar surveys",
+      "module": "survey_main",
+      "extra_args": [
+        "--digest",
+        "survey_marine",
+        "--config",
+        "data/survey_marine.json"
+      ]
+    },
+    "survey_measure": {
+      "sender": "Smart Ruler",
+      "recipients": {
+        "ist": [
+          "angelrose@lascade.com"
+        ],
+        "pt": [
+          "cherian@lascade.com"
+        ]
+      },
+      "name": "Smart Ruler surveys",
+      "module": "survey_main",
+      "extra_args": [
+        "--digest",
+        "survey_measure",
+        "--config",
+        "data/survey_measure.json"
+      ]
+    },
+    "survey_geo": {
+      "sender": "GeoAnimator",
+      "recipients": {
+        "ist": [
+          "angelrose@lascade.com",
+          "faris@lascade.com",
+          "vaishnav@lascade.com"
+        ],
+        "pt": [
+          "cherian@lascade.com"
+        ]
+      },
+      "name": "GeoAnimator feedback",
+      "module": "survey_main",
+      "extra_args": [
+        "--digest",
+        "survey_geo",
+        "--config",
+        "data/survey_geo.json"
+      ]
+    },
+    "conversion": {
+      "sender": "Lascade Apps",
+      "recipients": {
+        "ist": [
+          "angelrose@lascade.com"
+        ],
+        "pt": [
+          "cherian@lascade.com"
+        ]
+      },
+      "name": "Install → Paid",
+      "module": "conversion_main",
+      "extra_args": [
+        "--apps",
+        "data/conversion_apps.json"
+      ]
+    },
+    "container_credits": {
+      "sender": "MarineRadar",
+      "recipients": {
+        "ist": [
+          "angelrose@lascade.com",
+          "varsha@lascade.com"
+        ],
+        "pt": [
+          "cherian@lascade.com"
+        ]
+      },
+      "name": "Container tracking credits",
+      "module": "container_credits_main",
+      "extra_args": [
+        "--products",
+        "data/container_credits.json"
+      ]
+    },
+    "incomplete_checkout": {
+      "sender": "Angel Rose",
+      "reply_to": "connect@marineradar.com",
+      "name": "Incomplete checkout outreach",
+      "module": "ic_main",
+      "extra_args": [],
+      "_note": "Sends individual emails to each incomplete customer; recipients are dynamic from Stripe, not from this config"
+    }
+  },
+  "editions": {
+    "pt": {
+      "tz": "America/Los_Angeles",
+      "label": "PT",
+      "delivery": "05:55"
+    },
+    "ist": {
+      "tz": "Asia/Kolkata",
+      "label": "IST",
+      "delivery": "05:55"
+    }
+  }
+}

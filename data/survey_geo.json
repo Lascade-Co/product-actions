@@ -1,0 +1,67 @@
+{
+  "source": "posthog",
+  "posthog_project_id": 153421,
+  "posthog_survey_id": "01a0f720-96d1-0000-3f72-05e68a847972",
+  "posthog_api_key_env": "POSTHOG_GEO_API_KEY",
+  "product_name": "GeoAnimator",
+  "email_title": "GeoAnimator In-App Feedback",
+  "timezone": "Asia/Kolkata",
+  "sheet_url": "https://us.posthog.com/project/153421/surveys/01a0f720-96d1-0000-3f72-05e68a847972",
+  "source_label": "View all in PostHog",
+  "question_map": {
+    "area_index": 0,
+    "open_index": 7,
+    "area_detail_map": {
+      "Selecting or positioning locations": 1,
+      "Camera movement / transitions": 2,
+      "Highlighting or styling regions": 3,
+      "Adding text / labels": 4,
+      "Adding images": 4,
+      "Adding markers": 4,
+      "Timeline editing": 5,
+      "Exporting video": 6
+    }
+  },
+  "surveys": [
+    {
+      "sheet_name": "Trouble Areas",
+      "label": "Trouble Areas",
+      "subtitle": "What users struggle with",
+      "render": "distribution",
+      "columns": [
+        {
+          "col": 1,
+          "header": "Area",
+          "color_map": {
+            "Selecting or positioning locations": "#4a90d9",
+            "Highlighting or styling regions": "#9b59b6",
+            "Adding text / labels": "#2ecc71",
+            "Adding images": "#e67e22",
+            "Adding markers": "#1abc9c",
+            "Timeline editing": "#f1c40f",
+            "Exporting video": "#e74c3c",
+            "Camera movement / transitions": "#e84393"
+          }
+        }
+      ]
+    },
+    {
+      "sheet_name": "Other Issues",
+      "label": "Other Issues",
+      "subtitle": "Free-text responses not matching predefined areas",
+      "render": "summary",
+      "columns": [
+        {"col": 1, "header": "Reported issue"}
+      ]
+    },
+    {
+      "sheet_name": "Open Feedback",
+      "label": "Open Feedback",
+      "subtitle": "Free-form comments",
+      "render": "summary",
+      "columns": [
+        {"col": 1, "header": "Feedback"}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,141 @@
+{
+  "sheet_id": "REDACTED_SHEET_ID",
+  "sheet_url": "https://docs.google.com/spreadsheets/d/REDACTED_SHEET_ID/edit",
+  "product_name": "MarineRadar",
+  "email_title": "MarineRadar Survey Responses",
+  "timezone": "Asia/Kolkata",
+  "surveys": [
+    {
+      "sheet_name": "D2 Survey",
+      "label": "Day 2",
+      "subtitle": "First impressions",
+      "render": "distribution",
+      "columns": [
+        {"col": 1, "header": "Looking for"},
+        {"col": 2, "header": "Find vessel by"},
+        {
+          "col": 3,
+          "header": "Add to Fleet usage",
+          "color_map": {
+            "Yes, and I've already used it": "#2a8c4a",
+            "Yes, but I haven't used it yet": "#c9922a",
+            "No, I didn't know about this": "#888"
+          }
+        }
+      ]
+    },
+    {
+      "sheet_name": "D15 Survey",
+      "label": "Day 15",
+      "subtitle": "Feature usage",
+      "render": "distribution",
+      "columns": [
+        {"col": 1, "header": "Features used"},
+        {
+          "col": 2,
+          "header": "Vessel alerts usage",
+          "color_map": {
+            "Yes": "#2a8c4a",
+            "Not yet, but I plan to": "#c9922a",
+            "No": "#c0392b",
+            "I didn't know about vessel alerts": "#888"
+          }
+        },
+        {"col": 3, "header": "Alert channel preference"}
+      ]
+    },
+    {
+      "sheet_name": "D30 Survey",
+      "label": "Day 30",
+      "subtitle": "Issues & retention",
+      "columns": [
+        {"col": 1, "header": "Issues faced"},
+        {"col": 2, "header": "Feature request", "empty_text": "n/a", "empty_color": "#aaa"},
+        {
+          "col": 3,
+          "header": "Frequency",
+          "color_map": {
+            "Every day": "#2a8c4a",
+            "A few times a week": "#2a8c4a",
+            "Several times a day": "#2a8c4a"
+          },
+          "bold": ["Every day", "A few times a week", "Several times a day"]
+        }
+      ]
+    },
+    {
+      "sheet_name": "Route planner ",
+      "label": "Route Planner",
+      "subtitle": "Feedback",
+      "columns": [
+        {"col": 1, "header": "Feedback"}
+      ]
+    },
+    {
+      "sheet_name": "Add your ship ",
+      "label": "Missing Ships",
+      "subtitle": "Submissions",
+      "columns": [
+        {"col": 1, "header": "Vessel", "bold_all": true, "translate": false},
+        {"col": 2, "header": "IMO"},
+        {"col": 4, "header": "Type"},
+        {"col": 5, "header": "Country"},
+        {"col": 7, "header": "Details", "empty_text": "—", "empty_color": "#aaa"}
+      ]
+    },
+    {
+      "sheet_name": "paywall close survey",
+      "label": "Paywall Close",
+      "subtitle": "Why users didn't upgrade",
+      "render": "distribution",
+      "columns": [
+        {
+          "col": 1,
+          "header": "Reason",
+          "color_map": {
+            "Too expensive": "#c0392b",
+            "Technical issue / bug": "#c0392b",
+            "I don't need it right now": "#888",
+            "I'll upgrade later": "#c9922a",
+            "I prefer free features": "#888",
+            "Not sure what I'll get": "#c9922a",
+            "I'm just exploring the app": "#c9922a"
+          }
+        }
+      ]
+    },
+    {
+      "sheet_name": "Vessel Details Page",
+      "label": "Vessel Details",
+      "subtitle": "Page feedback",
+      "render": "summary",
+      "columns": [
+        {"col": 3, "header": "Matter"}
+      ]
+    },
+    {
+      "sheet_name": "Subscribers Survey",
+      "label": "Subscribers",
+      "subtitle": "Subscriber satisfaction",
+      "render": "summary",
+      "columns": [
+        {"col": 1, "header": "Motivation"},
+        {"col": 2, "header": "Got value?"},
+        {"col": 3, "header": "Improvements", "empty_text": "—", "empty_color": "#aaa"},
+        {"col": 4, "header": "Score", "is_score": true}
+      ]
+    },
+    {
+      "sheet_name": "Map Survey",
+      "label": "Map Survey",
+      "subtitle": "Feature requests",
+      "render": "summary",
+      "has_status": true,
+      "status_col": 4,
+      "status_values": {"premium": "Premium", "free": "Free"},
+      "columns": [
+        {"col": 1, "header": "Feature request"}
+      ]
+    }
+  ]
+}

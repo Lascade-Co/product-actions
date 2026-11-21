@@ -1,0 +1,481 @@
+#!/usr/bin/env python3
+"""Filter, translate, and group survey responses for the email model."""
+from collections import Counter
+from datetime import datetime, timedelta, timezone
+from dates import SHORT_MONTHS, long_date
+
+_TIMESTAMP_FMTS = [
+    "%m/%d/%Y %H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%d %H:%M:%S",
+    "%d/%m/%Y %H:%M:%S",
+]
+
+
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+_TZ_MAP = {
+    "Asia/Kolkata": _IST,
+    "UTC": timezone.utc,
+}
+
+
+_SHEETS_EPOCH = datetime(1899, 12, 30)
+
+_FUTURE_SLACK = timedelta(hours=2)
+
+
+def _parse_ts(raw, tz=None, now_utc=None):
+    """Parse a Google Sheets timestamp into a tz-aware datetime.
+
+    Handles serial date numbers (from dateTimeRenderOption=SERIAL_NUMBER)
+    as well as formatted date strings.  *tz* is the timezone the sheet
+    timestamps are in (default: UTC).
+
+    When *now_utc* is provided, any candidate that falls in the future
+    (beyond a small slack) is rejected and the next format is tried.
+    This guards against dd/mm ↔ mm/dd misparses that produce future dates.
+    """
+    raw = str(raw).strip()
+    if tz is None:
+        tz = timezone.utc
+    ceiling = (now_utc + _FUTURE_SLACK) if now_utc else None
+
+    def _accept(dt):
+        if ceiling and dt > ceiling:
+            return None
+        return dt
+
+    # Serial date number (days since 1899-12-30)
+    try:
+        serial = float(raw)
+        if 1 < serial < 200000:
+            dt = _SHEETS_EPOCH + timedelta(days=serial)
+            result = _accept(dt.replace(tzinfo=tz))
+            if result:
+                return result
+    except (ValueError, OverflowError):
+        pass
+    # An explicit offset (including Z) belongs to the timestamp, not the sheet.
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=tz)
+        result = _accept(dt)
+        if result:
+            return result
+    except ValueError:
+        pass
+    for fmt in _TIMESTAMP_FMTS:
+        try:
+            dt = datetime.strptime(raw, fmt).replace(tzinfo=tz)
+            result = _accept(dt)
+            if result:
+                return result
+        except ValueError:
+            continue
+    return None
+
+
+def filter_new_responses(rows, cutoff_dt, tz=None, now_utc=None):
+    """Return rows in [cutoff_dt, now_utc); now_utc is the report cutoff."""
+    out = []
+    for row in rows:
+        if not row:
+            continue
+        ts = _parse_ts(row[0], tz, now_utc=now_utc)
+        if ts and cutoff_dt <= ts and (now_utc is None or ts < now_utc):
+            out.append(row)
+    return out
+
+
+def detect_and_translate(text, translate_fn):
+    """Return (display_text, translated, language, failed), using Cloud detection."""
+    if not text or not translate_fn:
+        return text, False, None, False
+    if re.fullmatch(r"[+-]?(?:\d+(?:[.,]\d+)*|[.,]\d+)%?", text.strip()):
+        return text, False, None, False
+    if re.match(r"^(?:[a-z][a-z0-9+.-]*://|www\.)\S+$", text.strip(), re.IGNORECASE):
+        return text, False, None, False
+    try:
+        translated, lang, ok = translate_fn(text)
+        if not ok or not isinstance(translated, str) or not translated.strip() or not isinstance(lang, str) or not lang:
+            return text, False, None, True
+    except Exception:
+        log.warning("Survey translation failed")
+        return text, False, None, True
+    if lang.lower().split("-")[0] == "en":
+        return text, False, lang, False
+    return translated, translated != text, lang, False
+
+
+def _translated_value(text, col_def, translate_fn):
+    if col_def.get("translate", True):
+        value, translated, lang, failed = detect_and_translate(text, translate_fn)
+    else:
+        value, translated, lang, failed = text, False, None, False
+    return {"value": value, "translated": translated, "lang": lang, "translate_failed": failed}
+
+
+def _cell_value(row, col_index):
+    """Safely get a cell value from a row."""
+    if col_index < len(row):
+        return str(row[col_index]).strip()
+    return ""
+
+
+import re
+import json
+import logging
+import urllib.request
+import urllib.error
+
+log = logging.getLogger(__name__)
+
+_OTHER_RE = re.compile(r"^other\b", re.IGNORECASE)
+_LOW_VALUE = {"", "—", "-", "n/a", "na", "none", "no", "nothing", "nil", ".", "ok", "good"}
+_MAX_SUMMARY_GROUPS = 8
+_PALETTE = [
+    "#4a90d9", "#e67e22", "#2ecc71", "#e74c3c", "#9b59b6",
+    "#1abc9c", "#f1c40f", "#e84393", "#00b894", "#6c5ce7",
+]
+
+_GROUP_PROMPT = """\
+You are a survey response analyst. Given a list of user responses (already translated to English), \
+group similar responses into themed summary points.
+
+Rules:
+- Each group has a short summary (max 12 words) describing the common theme
+- Include specific examples (ship names, feature names) in parentheses when relevant
+- Discard low-value responses like "ok", "good", "nothing", single characters
+- Maximum {max_groups} groups; roll remaining into an "Other responses" group
+- Return ONLY valid JSON, no markdown fences
+
+Responses:
+{responses}
+
+Return JSON array: [{{"summary": "...", "count": N}}, ...]
+Count = number of original responses in that group. Total counts must equal {total}."""
+
+
+def _llm_group(texts, gemini_key):
+    """Group responses using Gemini Flash."""
+    prompt = _GROUP_PROMPT.format(
+        responses="\n".join(f"- {t}" for t in texts),
+        total=len(texts),
+        max_groups=_MAX_SUMMARY_GROUPS,
+    )
+    body = json.dumps({
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.1,
+            "maxOutputTokens": 1024,
+            "responseMimeType": "application/json",
+        },
+    }).encode()
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        "gemini-3.5-flash-lite:generateContent?key=" + gemini_key
+    )
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
+        raw = data["candidates"][0]["content"]["parts"][0]["text"]
+        groups = json.loads(raw)
+        return [{"text": g["summary"], "count": g["count"]} for g in groups]
+    except Exception:
+        log.warning("Gemini grouping failed, falling back to simple")
+        return None
+
+
+def _simple_group(texts):
+    """Fallback: exact-match grouping via Counter."""
+    counted = Counter(texts)
+    results = [{"text": t, "count": c} for t, c in counted.most_common()]
+    if len(results) > _MAX_SUMMARY_GROUPS:
+        kept = results[:_MAX_SUMMARY_GROUPS]
+        rest = sum(g["count"] for g in results[_MAX_SUMMARY_GROUPS:])
+        kept.append({"text": f"{rest} other responses", "count": rest})
+        results = kept
+    return results
+
+
+def _fuzzy_group(texts, gemini_key=None):
+    if not texts:
+        return []
+    if len(texts) == 1:
+        return [{"text": texts[0], "count": 1}]
+    if gemini_key:
+        result = _llm_group(texts, gemini_key)
+        if result:
+            return result
+    return _simple_group(texts)
+
+
+def _split_multi(val, color_map=None):
+    """Split a multi-choice response into individual options.
+
+    Google Forms stores checkbox answers as 'Option A, Option B'.
+    If a color_map is provided and the whole value matches a key, return it as-is.
+    Normalise 'Other: free text' → 'Other'.
+    """
+    if not val:
+        return []
+    if color_map and val in color_map:
+        return [val]
+    parts = [p.strip() for p in val.split(",")]
+    out = []
+    for p in parts:
+        if not p:
+            continue
+        out.append(_normalise_option(p, color_map))
+    return out
+
+
+def _normalise_option(value, color_map=None):
+    if _OTHER_RE.match(value):
+        return "Other"
+    for key in color_map or {}:
+        if value.lower() == key.lower():
+            return key
+    return value
+
+
+def _build_distribution(rows, col_def, translate_fn):
+    color_map = col_def.get("color_map", {})
+    counter = Counter()
+    statuses = {}
+    for row in rows:
+        for part in _split_multi(_cell_value(row, col_def["col"]), color_map):
+            item = _translated_value(part, col_def, translate_fn)
+            value = _normalise_option(item["value"], color_map)
+            counter[value] += 1
+            status = statuses.setdefault(value, {
+                "translated": False, "lang": None, "translate_failed": False,
+            })
+            status["translate_failed"] |= item["translate_failed"]
+            if item["translated"]:
+                if not status["translated"]:
+                    status["lang"] = item["lang"]
+                elif status["lang"] != item["lang"]:
+                    status["lang"] = None
+                status["translated"] = True
+    total = sum(counter.values())
+    options = [{
+        "value": value, "count": count,
+        "pct": round(count / total * 100, 1),
+        "color": color_map.get(value, _PALETTE[index % len(_PALETTE)]),
+        **statuses[value],
+    } for index, (value, count) in enumerate(counter.most_common())]
+    return {"header": col_def["header"], "total": total, "options": options}
+
+
+def _is_meaningful(text):
+    """Return True if a free-text response carries signal."""
+    return text.strip().lower() not in _LOW_VALUE
+
+
+def build_model(config, fetched_tabs, cutoff_dt, now_dt, translate_fn=None, display_tz=None, gemini_key=None):
+    """Build the template model from config + raw sheet data.
+
+    Supports two status patterns:
+    - Global: config has "has_pro_free": true + "status_col" (Smart Ruler)
+    - Per-survey: survey has "has_status": true + "status_col" (Marine Radar Map Survey)
+    """
+    sections = []
+    total = 0
+    free_count = 0
+    pro_count = 0
+
+    sheet_tz = _TZ_MAP.get(config.get("timezone", "UTC"), timezone.utc)
+    global_status = config.get("has_pro_free", False)
+    global_status_col = config.get("status_col", 2)
+
+    for survey in config["surveys"]:
+        rows = fetched_tabs.get(survey["sheet_name"], [])
+        filtered = filter_new_responses(rows, cutoff_dt, sheet_tz, now_utc=now_dt)
+        if not filtered:
+            continue
+
+        render_mode = survey.get("render", "table")
+        has_status = survey.get("has_status", global_status)
+        status_col = survey.get("status_col", global_status_col)
+        status_values = survey.get("status_values", {"pro": "Pro", "free": "Free"})
+        count = len(filtered)
+        total += count
+
+        if has_status:
+            for row in filtered:
+                status_raw = _cell_value(row, status_col).lower()
+                if status_raw in ("pro", "premium"):
+                    pro_count += 1
+                else:
+                    free_count += 1
+
+        if render_mode == "distribution":
+            distributions = [_build_distribution(filtered, col_def, translate_fn)
+                             for col_def in survey["columns"]]
+            sections.append({
+                "label": survey["label"],
+                "subtitle": survey["subtitle"],
+                "render": "distribution",
+                "count": count,
+                "distributions": distributions,
+                "has_status": False,
+            })
+
+        elif render_mode == "summary":
+            summaries = []
+            for col_def in survey["columns"]:
+                color_map = col_def.get("color_map", {})
+                is_score = col_def.get("is_score", False)
+
+                if color_map:
+                    distribution = _build_distribution(filtered, col_def, translate_fn)
+                    summaries.append({"type": "distribution", **distribution})
+                elif is_score:
+                    scores = []
+                    for row in filtered:
+                        v = _cell_value(row, col_def["col"])
+                        try:
+                            scores.append(int(v))
+                        except ValueError:
+                            pass
+                    avg = sum(scores) / len(scores) if scores else 0
+                    summaries.append({
+                        "header": col_def["header"],
+                        "type": "score",
+                        "avg": round(avg, 1),
+                        "total": len(scores),
+                        "breakdown": dict(Counter(scores)),
+                    })
+                else:
+                    translated = []
+                    failed = []
+                    for row in filtered:
+                        v = _cell_value(row, col_def["col"])
+                        if not _is_meaningful(v):
+                            continue
+                        item = _translated_value(v, col_def, translate_fn)
+                        tv = item["value"].strip()
+                        if tv:
+                            (failed if item["translate_failed"] else translated).append(tv)
+                    grouped = _fuzzy_group(translated, gemini_key=gemini_key)
+                    grouped.extend({**group, "translate_failed": True}
+                                   for group in _simple_group(failed))
+                    summaries.append({
+                        "header": col_def["header"],
+                        "type": "grouped",
+                        "total": len(translated) + len(failed),
+                        "groups": grouped,
+                    })
+            sections.append({
+                "label": survey["label"],
+                "subtitle": survey["subtitle"],
+                "render": "summary",
+                "count": count,
+                "summaries": summaries,
+                "has_status": has_status,
+            })
+
+        else:
+            rendered_rows = []
+            for row in filtered:
+                status_label = None
+                status_color = None
+                if has_status:
+                    status_raw = _cell_value(row, status_col).lower()
+                    is_pro = status_raw in ("pro", "premium")
+                    status_label = status_values.get(status_raw, "Pro" if is_pro else "Free")
+                    status_color = "#5a5aad" if is_pro else "#888"
+
+                cells = []
+                for col_def in survey["columns"]:
+                    val = _cell_value(row, col_def["col"])
+                    translation = _translated_value(val, col_def, translate_fn)
+                    val = translation["value"]
+
+                    color = "#222"
+                    bold = False
+                    empty_text = col_def.get("empty_text")
+                    empty_color = col_def.get("empty_color", "#aaa")
+                    color_map = col_def.get("color_map", {})
+                    bold_list = col_def.get("bold", [])
+                    bold_all = col_def.get("bold_all", False)
+                    is_score = col_def.get("is_score", False)
+
+                    if not val and empty_text:
+                        val = empty_text
+                        color = empty_color
+                    elif not val:
+                        val = "—"
+                        color = "#aaa"
+
+                    if is_score and val:
+                        try:
+                            score = int(val)
+                            val = f"{score}/5"
+                            if score >= 4:
+                                color = "#2a8c4a"
+                            elif score == 3:
+                                color = "#c9922a"
+                            else:
+                                color = "#c0392b"
+                            bold = True
+                        except ValueError:
+                            pass
+
+                    if val in color_map:
+                        color = color_map[val]
+                    if bold_all:
+                        bold = True
+                    elif isinstance(bold_list, list) and val in bold_list:
+                        bold = True
+
+                    cells.append({
+                        **translation,
+                        "value": val,
+                        "color": color,
+                        "bold": bold,
+                    })
+
+                rendered_rows.append({
+                    "cells": cells,
+                    "status_label": status_label,
+                    "status_color": status_color,
+                })
+
+            sections.append({
+                "label": survey["label"],
+                "subtitle": survey["subtitle"],
+                "render": "table",
+                "columns": [c["header"] for c in survey["columns"]],
+                "rows": rendered_rows,
+                "count": len(rendered_rows),
+                "has_status": has_status,
+            })
+
+    disp_now = now_dt.astimezone(display_tz) if display_tz else now_dt
+    disp_cutoff = cutoff_dt.astimezone(display_tz) if display_tz else cutoff_dt
+    tz_label = f" {disp_cutoff.strftime('%Z')}" if display_tz else ""
+
+    date_str = long_date(disp_now)
+
+    cutoff_h = disp_cutoff.hour % 12 or 12
+    cutoff_ampm = "AM" if disp_cutoff.hour < 12 else "PM"
+    cutoff_str = f"{disp_cutoff.day} {SHORT_MONTHS[disp_cutoff.month - 1]} {cutoff_h}:{disp_cutoff.minute:02d} {cutoff_ampm}{tz_label}"
+
+    return {
+        "product_name": config.get("product_name", "Survey"),
+        "email_title": config.get("email_title", "Survey Responses"),
+        "sections": sections,
+        "total": total,
+        "survey_count": len(sections),
+        "free_count": free_count,
+        "pro_count": pro_count,
+        "date_str": date_str,
+        "cutoff_str": cutoff_str,
+        "sheet_url": config.get("sheet_url", ""),
+        "source_label": config.get("source_label", "View all in Sheets"),
+    }
