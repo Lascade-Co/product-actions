@@ -1,0 +1,250 @@
+name: Daily TreasureHunch retention
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build the email without sending it
+        type: boolean
+        default: false
+      report_date:
+        description: Pacific report date (YYYY-MM-DD); blank uses the newest date past 05:00
+        type: string
+        default: ''
+      recovery:
+        description: Send the real email only if its Deliver step has not succeeded
+        type: boolean
+        default: false
+      test_alert:
+        description: Fail this test run to exercise the Telegram alert
+        type: boolean
+        default: false
+      to:
+        description: Recipient for manual tests only
+        type: string
+        default: cherian@lascade.com
+  schedule:
+    - cron: '41 3 * * *'
+    - cron: '41 6 * * *'
+    - cron: '41 9 * * *'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: daily-hunch-retention-${{ github.event_name }}
+  cancel-in-progress: false
+
+env:
+  EVENT: ${{ github.event_name }}
+  INPUT_DATE: ${{ inputs.report_date }}
+  INPUT_TO: ${{ inputs.to || 'cherian@lascade.com' }}
+  DRY_RUN: ${{ inputs.dry_run }}
+  RECOVERY: ${{ inputs.recovery }}
+  PYTHONPATH: ${{ github.workspace }}/scripts/common:${{ github.workspace }}/scripts/ai:${{ github.workspace }}/scripts/hunch
+
+defaults:
+  run:
+    shell: "seal-bash-e {0}"
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    outputs:
+      proceed: ${{ steps.gate.outputs.proceed }}
+      report_date: ${{ github.event_name == 'schedule' && steps.gate.outputs.report_date || steps.settings.outputs.report_date }}
+    steps:
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: |
+            scripts/common
+            scripts/hunch
+          sparse-checkout-cone-mode: false
+      - name: Resolve settings
+        id: settings
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/hunch/hr_workflow.py settings
+      - id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/common/gate.py --phase 1 --event "$EVENT" --workflow daily-hunch-retention.yml \
+            --sent-step "Deliver hunch retention for " --tz America/Los_Angeles --target 05:05
+
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1
+
+  gate2:
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    outputs:
+      proceed: ${{ steps.gate.outputs.proceed }}
+      report_date: ${{ steps.gate.outputs.report_date }}
+    steps:
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: scripts/common
+          sparse-checkout-cone-mode: false
+      - id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPORT_DATE: ${{ needs.gate.outputs.report_date }}
+        run: |
+          python3 scripts/common/gate.py --phase 2 --event "$EVENT" --workflow daily-hunch-retention.yml \
+            --sent-step "Deliver hunch retention for " --tz America/Los_Angeles --target 05:05 \
+            --report-date "$REPORT_DATE"
+
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1
+
+  # Only the actual sender step records Resend acceptance for delivery history.
+  email:
+    needs: gate2
+    if: needs.gate2.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 75
+    outputs:
+      report_date: ${{ steps.dates.outputs.report_date }}
+    concurrency:
+      group: daily-hunch-retention-email
+      cancel-in-progress: false
+    steps:
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: |
+            scripts/common
+            scripts/hunch
+            scripts/fetch-ai.sh
+            .github/actions/fetch-ai
+          sparse-checkout-cone-mode: false
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - uses: ./.github/actions/fetch-ai
+      - name: Install dependencies
+        run: pip install --quiet requests==2.34.2
+      - name: Work out the report date
+        id: dates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPORT_DATE: ${{ github.event_name == 'schedule' && needs.gate2.outputs.report_date || inputs.report_date }}
+        run: python3 scripts/hunch/hr_workflow.py settings
+      - name: Fail on purpose (alert test)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.test_alert }}
+        run: |
+          echo test-alert
+          exit 1
+      - name: Build the email
+        working-directory: scripts/hunch
+        env:
+          POSTHOG_PERSONAL_API_KEY: ${{ secrets.HUNCH_POSTHOG_QUERY_API_KEY }}
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+          REPORT_DATE: ${{ steps.dates.outputs.report_date }}
+          HR_TEST_NUMBER: ${{ steps.dates.outputs.mode == 'test' && github.run_number || '' }}
+        run: |
+          if [ -z "$POSTHOG_PERSONAL_API_KEY" ]; then
+            echo posthog-key-missing >&2
+            exit 1
+          fi
+          FLAGS=()
+          if [ "$DRY_RUN" = true ]; then FLAGS+=(--dry-run); fi
+          python3 hr_main.py --report-date "$REPORT_DATE" --out out "${FLAGS[@]}"
+      - name: Pack the preview
+        if: ${{ inputs.dry_run }}
+        run: seal-pack preview-hunch-retention scripts/hunch/out
+      - name: Upload the preview
+        if: ${{ inputs.dry_run }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: preview-hunch-retention
+          path: ${{ runner.temp }}/seal/art/preview-hunch-retention/
+          retention-days: 7
+          if-no-files-found: error
+      # Lateness never fails delivery: a late build sends at once with the original date.
+      - name: Hold until 05:55 Pacific
+        if: ${{ !inputs.dry_run }}
+        env:
+          REPORT_DATE: ${{ steps.dates.outputs.report_date }}
+        run: python3 scripts/common/hold.py --report-date "$REPORT_DATE" --tz America/Los_Angeles --target 05:55
+      - name: Check it has not gone out already
+        id: dedupe
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPORT_DATE: ${{ steps.dates.outputs.report_date }}
+        run: python3 scripts/hunch/hr_workflow.py dedupe
+      - name: ${{ steps.dates.outputs.send_step }}
+        if: ${{ !inputs.dry_run && steps.dedupe.outputs.sent != 'True' }}
+        working-directory: scripts/hunch
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          REPORT_DATE: ${{ steps.dates.outputs.report_date }}
+          MODE: ${{ steps.dates.outputs.mode }}
+          RECIPIENT: ${{ steps.dates.outputs.recipient }}
+          RUN_ID: ${{ github.run_id }}
+          HR_TEST_NUMBER: ${{ steps.dates.outputs.mode == 'test' && github.run_number || '' }}
+        run: |
+          FLAGS=()
+          if [ "$MODE" = real ] && [ "$EVENT" = workflow_dispatch ]; then FLAGS+=(--recovery); fi
+          python3 hr_send.py --report-date "$REPORT_DATE" --event "$EVENT" --run-id "$RUN_ID" \
+            --out out --to "$RECIPIENT" "${FLAGS[@]}"
+
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1
+
+  notify:
+    needs: [gate, gate2, email]
+    if: ${{ failure() }}
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 5
+    steps:
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: |
+            scripts/common
+            scripts/hunch
+          sparse-checkout-cone-mode: false
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Install dependencies
+        run: pip install --quiet requests==2.34.2
+      - name: Alert on Telegram
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TOKEN: ${{ secrets.INSTALLPAID_TELEGRAM_TOKEN }}
+          CHAT: ${{ secrets.INSTALLPAID_TELEGRAM_CHAT }}
+          REPORT_DATE: ${{ needs.email.outputs.report_date || needs.gate2.outputs.report_date || needs.gate.outputs.report_date }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          NOW=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" --jq .run_started_at 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
+          export NOW
+          python3 scripts/hunch/hr_workflow.py notify
+
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1
