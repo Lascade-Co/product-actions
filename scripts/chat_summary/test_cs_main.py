@@ -18,8 +18,10 @@ GENERIC = "Chat digest build failed; no delivery marker was recorded."
 
 def cli(tmp_path, *args, **env):
     pythonpath = os.pathsep.join(str(ROOT / d) for d in ("scripts/common", "scripts/ai", "scripts/chat_summary"))
+    # setup-python's toolcache interpreter may need LD_LIBRARY_PATH to start on Linux runners.
+    runtime = {k: os.environ[k] for k in ("LD_LIBRARY_PATH",) if k in os.environ}
     return subprocess.run([sys.executable, str(HERE / "cs_main.py"), *args], cwd=tmp_path, capture_output=True,
-                          text=True, env={"PATH": os.environ["PATH"], "PYTHONPATH": pythonpath, **env})
+                          text=True, env={"PATH": os.environ["PATH"], "PYTHONPATH": pythonpath, **runtime, **env})
 
 
 def test_cli_prints_a_known_missing_environment_name_without_a_stack(tmp_path):
