@@ -1,0 +1,22 @@
+name: Test
+on: [push, pull_request]
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: seal-bash-e {0}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - uses: ./.github/actions/fetch-ai
+      - run: pip install --quiet -r requirements.txt pytest==9.1.1
+      - run: python -m pytest -q
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1

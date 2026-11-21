@@ -1,0 +1,8 @@
+beautifulsoup4==4.15.0
+cryptography==50.0.0
+google-auth==2.63.0
+lxml==6.1.1
+pillow==12.3.0
+pyjwt==2.13.0
+PyYAML==6.0.3
+requests==2.34.2

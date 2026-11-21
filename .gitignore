@@ -1,0 +1,7 @@
+scripts/ai/
+out/
+.cache/
+*.local.json
+__pycache__/
+.env
+docs/research/

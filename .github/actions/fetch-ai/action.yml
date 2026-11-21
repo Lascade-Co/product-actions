@@ -1,0 +1,11 @@
+name: Fetch shared Claude client
+description: Downloads scripts/ai/claude_api.py and scripts/ai/requirements.txt from Lascade-Co/actions main, then installs the requirements.
+runs:
+  using: composite
+  steps:
+    - name: Fetch scripts/ai
+      shell: seal-bash-e {0}
+      run: bash "$GITHUB_WORKSPACE/scripts/fetch-ai.sh"
+    - name: Install Claude client requirements
+      shell: seal-bash-e {0}
+      run: pip install --quiet -r scripts/ai/requirements.txt
