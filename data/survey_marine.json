@@ -1,6 +1,5 @@
 {
-  "sheet_id": "REDACTED_SHEET_ID",
-  "sheet_url": "https://docs.google.com/spreadsheets/d/REDACTED_SHEET_ID/edit",
+  "sheet_id_env": "SURVEY_MARINE_SHEET_ID",
   "product_name": "MarineRadar",
   "email_title": "MarineRadar Survey Responses",
   "timezone": "Asia/Kolkata",

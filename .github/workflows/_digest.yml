@@ -96,6 +96,8 @@ jobs:
           ADAPTY_KEY_SMARTRULER: ${{ secrets.ADAPTY_KEY_SMARTRULER }}
           ADAPTY_KEY_GEOANIMATOR: ${{ secrets.ADAPTY_KEY_GEOANIMATOR }}
           POSTHOG_GEO_API_KEY: ${{ secrets.POSTHOG_GEO_API_KEY }}
+          SURVEY_MARINE_SHEET_ID: ${{ secrets.SURVEY_MARINE_SHEET_ID }}
+          SURVEY_MEASURE_SHEET_ID: ${{ secrets.SURVEY_MEASURE_SHEET_ID }}
         run: |
           python3 - <<'PY'
           import json, os, subprocess, sys

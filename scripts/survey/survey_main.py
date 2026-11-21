@@ -39,15 +39,27 @@ def _google_settings():
     return sa_info, gemini_key or None
 
 
+def _sheet_id(config):
+    """Read the survey Sheet ID from the secret named by the config; the ID is private."""
+    env_name = config["sheet_id_env"]
+    sheet_id = os.environ.get(env_name, "").strip()
+    if not sheet_id:
+        raise ValueError(f"{env_name} not set")
+    mask(sheet_id)
+    return sheet_id
+
+
 def _fetch_sheets(config, start, end, tz):
     """Fetch survey data from Google Sheets."""
+    sheet_id = _sheet_id(config)
+    config["sheet_url"] = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
     sa_info, gemini_key = _google_settings()
     fetched_tabs = {}
     failures = 0
     for survey in config["surveys"]:
         tab = survey["sheet_name"]
         try:
-            fetched_tabs[tab] = fetch_sheet_tab(sa_info, config["sheet_id"], tab)
+            fetched_tabs[tab] = fetch_sheet_tab(sa_info, sheet_id, tab)
         except FetchError:
             failures += 1
     print(f"records: rows={sum(len(rows) for rows in fetched_tabs.values())} failed_tabs={failures}")

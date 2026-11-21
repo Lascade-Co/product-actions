@@ -143,6 +143,15 @@ never share a report.
 - **Origin** URLs are legitimate only as **asset URLs**. Any other origin URL is a **finding** —
   `error` when in a **crawlable position**, `warn` when merely present in the markup.
 
+**Placeholder**:
+A sized `<img>`/`<video>` stand-in in a draft, marked `data-placeholder`. An `error` (`D9`) in a published
+**blog**.
+_Avoid_: stand-in, dummy image, mock.
+
+**Editor checklist**:
+A block marked `data-strip-before-publish`, instructing its own deletion. An `error` (`D9`) in a published
+**blog**.
+
 ## Language — Marketing Net
 
 The daily cron (`.github/workflows/daily-marketing-net.yml`) that posts a three-image Telegram report:

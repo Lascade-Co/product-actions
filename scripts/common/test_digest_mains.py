@@ -62,7 +62,7 @@ class MainBuildTests(unittest.TestCase):
     def test_both_survey_products_write_digest_specific_filenames(self):
         main = self._load("survey")
         for digest, head in (("survey_marine", "MarineRadar surveys"), ("survey_measure", "Smart Ruler surveys")):
-            with self.subTest(digest=digest), tempfile.TemporaryDirectory(dir=ROOT) as directory, contextlib.chdir(directory), patch.dict(os.environ, {"GOOGLE_SA_KEY": base64.b64encode(b"{}").decode(), "GOOGLE_API_KEY": "", "GITHUB_ACTIONS": "false"}), patch.object(main, "fetch_sheet_tab", return_value=[]), patch.object(main, "send_digest", side_effect=AssertionError("dry run must not send")), contextlib.redirect_stdout(io.StringIO()):
+            with self.subTest(digest=digest), tempfile.TemporaryDirectory(dir=ROOT) as directory, contextlib.chdir(directory), patch.dict(os.environ, {"GOOGLE_SA_KEY": base64.b64encode(b"{}").decode(), "GOOGLE_API_KEY": "", "GITHUB_ACTIONS": "false", "SURVEY_MARINE_SHEET_ID": "fixture", "SURVEY_MEASURE_SHEET_ID": "fixture"}), patch.object(main, "fetch_sheet_tab", return_value=[]), patch.object(main, "send_digest", side_effect=AssertionError("dry run must not send")), contextlib.redirect_stdout(io.StringIO()):
                 main.main(["--digest", digest, "--edition", "ist", "--report-date", "2026-10-21", "--dry-run"])
                 subject, _ = self._read_preview(digest, "ist")
                 self.assertTrue(subject.startswith(head + " · Wed, Oct 21"))
