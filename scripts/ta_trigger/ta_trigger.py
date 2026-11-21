@@ -26,8 +26,8 @@ import sys
 import time
 from zoneinfo import ZoneInfo
 
-from scripts.common import catchup_gate as G
-from scripts.common import hold as H
+import gate as G
+import hold as H
 
 REPO = "Lascade-Co/TA-daily-issues-digest"
 KINDS = {"issues": "daily-digest.yml", "crash": "crash-digest.yml"}

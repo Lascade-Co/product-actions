@@ -3,7 +3,7 @@ import unittest
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from scripts.survey.survey_model import filter_new_responses, _parse_ts
+from survey_model import filter_new_responses, _parse_ts
 
 
 class SurveyWindowTests(unittest.TestCase):
@@ -38,7 +38,7 @@ class FetchWindowTests(unittest.TestCase):
         import sys
         from types import SimpleNamespace
         from unittest.mock import patch
-        fetch = self._load("scripts.revenue.revenue_fetch")
+        fetch = self._load("revenue_fetch")
         start, end = 100, 200
         data = [{"id": f"item-{t}", "amount": 1000, "currency": "usd", "created": t,
                  "status": "succeeded", "metadata": {}} for t in (99, 100, 199, 200, 260)]
@@ -59,7 +59,7 @@ class FetchWindowTests(unittest.TestCase):
         import sys
         from types import SimpleNamespace
         from unittest.mock import patch
-        fetch = self._load("scripts.reviews.reviews_fetch")
+        fetch = self._load("reviews_fetch")
         start = datetime(2026, 10, 20, 5, tzinfo=timezone.utc)
         end = datetime(2026, 10, 21, 5, tzinfo=timezone.utc)
         stamps = ("2026-10-21T05:01:00Z", "2026-10-21T05:00:00Z", "2026-10-21T04:59:59Z", "2026-10-20T05:00:00Z", "2026-10-20T04:59:59Z")
@@ -74,7 +74,7 @@ class FetchWindowTests(unittest.TestCase):
         from types import SimpleNamespace
         from unittest.mock import patch
         from urllib.parse import quote
-        fetch = self._load("scripts.reviews.reviews_fetch")
+        fetch = self._load("reviews_fetch")
         start, end = datetime.fromtimestamp(100, timezone.utc), datetime.fromtimestamp(200, timezone.utc)
         data = [{"authorName": "Private author", "comments": [{"userComment": {"lastModified": {"seconds": t}, "text": "Private text", "starRating": 1}}]} for t in (260, 200, 199, 100, 99)]
         request_client = SimpleNamespace(utils=SimpleNamespace(quote=quote), get=lambda *args, **kwargs: SimpleNamespace(status_code=200, json=lambda: {"reviews": data}))
@@ -87,7 +87,7 @@ class FetchWindowTests(unittest.TestCase):
         import sys
         from types import SimpleNamespace
         from unittest.mock import patch
-        fetch = self._load("scripts.conversion.conversion_fetch")
+        fetch = self._load("conversion_fetch")
         body = {"data": [{"type": "total", "value": 20, "value_from": 20, "value_to": 4,
                            "values": [{"x": "2026-10-20", "value_from": 10, "value_to": 2, "y": 20},
                                       {"x": "2026-10-21", "value_from": 10, "value_to": 2, "y": 20}]}]}
@@ -107,7 +107,7 @@ class FetchWindowTests(unittest.TestCase):
         import sys
         from types import SimpleNamespace
         from unittest.mock import patch
-        fetch = self._load("scripts.survey.survey_fetch")
+        fetch = self._load("survey_fetch")
         out, err = io.StringIO(), io.StringIO()
         request_client = SimpleNamespace(get=lambda *args, **kwargs: SimpleNamespace(status_code=403, text="PRIVATE CUSTOMER BODY"))
         with patch.object(fetch, "_get_credentials", return_value=SimpleNamespace(token="secret")), patch.dict(sys.modules, {"requests": request_client}), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):

@@ -5,14 +5,14 @@ from pathlib import Path
 import tempfile
 import unittest
 
-import render_fixtures
-from scripts.reviews.reviews_render import render
+import digest_render_fixtures
+from reviews_render import render
 from translation_cases import REVIEW_CASES
 
 
 class TranslationFixtureTests(unittest.TestCase):
     def test_mobile_review_fixture_exercises_a_successful_translation(self):
-        model = render_fixtures.mobile_fixture_models()["reviews"]
+        model = digest_render_fixtures.mobile_fixture_models()["reviews"]
         review = model["apps"][0]["playstore_reviews"][0]
         _, html = render(model)
         self.assertTrue(review["translated_body"] in html, "Translated body must be visible")
@@ -21,7 +21,7 @@ class TranslationFixtureTests(unittest.TestCase):
         self.assertFalse("Translation unavailable" in html, "Successful fixture must not show failure")
 
     def test_preview_includes_four_translated_reviews_and_untouched_english(self):
-        _, html = render(render_fixtures.translation_fixture_model())
+        _, html = render(digest_render_fixtures.translation_fixture_model())
         self.assertEqual(html.count("Translated from "), 4)
         for case in REVIEW_CASES:
             self.assertIn(case["body_en"], html)
@@ -34,11 +34,9 @@ class TranslationFixtureTests(unittest.TestCase):
         self.assertNotIn("Non-English", html)
 
     def test_standard_render_command_writes_translation_preview_with_count_only_output(self):
-        scratch = Path(__file__).resolve().parents[1] / ".scratch"
-        scratch.mkdir(exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=scratch) as directory, \
+        with tempfile.TemporaryDirectory() as directory, \
                 contextlib.redirect_stdout(io.StringIO()) as output:
-            render_fixtures.write_previews(directory)
+            digest_render_fixtures.write_previews(directory)
             self.assertTrue((Path(directory) / "reviews-translated.html").exists())
             self.assertEqual(len(list(Path(directory).glob("*.html"))), 6)
         self.assertEqual(output.getvalue(), "Rendered 6 synthetic fixture previews\n")

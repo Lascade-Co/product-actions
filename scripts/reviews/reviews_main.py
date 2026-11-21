@@ -13,12 +13,12 @@ ROOT = Path(__file__).resolve().parents[2]
 if __package__ in (None, ""):
     sys.path.insert(0, str(ROOT))
 
-from scripts.common.dates import report_date_for, subject, window_for
-from scripts.common.delivery import load_config, mask, send_digest, write_preview
-from scripts.reviews.reviews_fetch import fetch_appstore_reviews, fetch_playstore_reviews
-from scripts.reviews.reviews_model import build_model
-from scripts.reviews.reviews_render import render
-from scripts.survey import survey_fetch
+from dates import report_date_for, subject, window_for
+from delivery import load_config, mask, send_digest, write_preview
+from reviews_fetch import fetch_appstore_reviews, fetch_playstore_reviews
+from reviews_model import build_model
+from reviews_render import render
+import survey_fetch
 
 
 def main(argv=None):

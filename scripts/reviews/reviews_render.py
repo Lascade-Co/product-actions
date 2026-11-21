@@ -2,7 +2,7 @@
 """Pure app review renderer built on the shared email shell."""
 from html import escape
 
-from scripts.common import email_shell as shell
+import email_shell as shell
 
 
 _LANGUAGE_NAMES = {

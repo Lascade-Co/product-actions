@@ -11,13 +11,13 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 class MainBuildTests(unittest.TestCase):
     def _load(self, name):
         try:
-            return importlib.import_module(f"scripts.{name}.{name}_main")
+            return importlib.import_module(f"{name}_main")
         except ModuleNotFoundError as exc:
             self.fail(f"Main must be importable without network SDKs: {exc.name}")
 

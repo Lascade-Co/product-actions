@@ -1,7 +1,7 @@
 """Keep digest stat labels compact without changing the template typography."""
 import unittest
 
-from test_strict_render import render_tree
+from test_digest_strict_render import render_tree
 
 
 class StatLabelTests(unittest.TestCase):

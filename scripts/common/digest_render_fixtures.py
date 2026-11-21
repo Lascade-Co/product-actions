@@ -1,7 +1,7 @@
 """Offline, synthetic renderer fixtures and a local HTML preview writer.
 
-Run from the repository root: python3 tests/render_fixtures.py <output-directory>
-Mobile acceptance fixtures: python3 tests/render_fixtures.py --mobile <output-directory>
+Run from the repository root: python3 scripts/common/digest_render_fixtures.py <output-directory>
+Mobile acceptance fixtures: python3 scripts/common/digest_render_fixtures.py --mobile <output-directory>
 """
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -11,7 +11,7 @@ from pathlib import Path
 import sys
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 
@@ -111,7 +111,7 @@ def fixture_models():
     }
     survey_measure = deepcopy(survey)
     survey_measure.update(product_name="Smart Ruler", email_title="Smart Ruler Surveys")
-    from scripts.conversion.conversion_model import build_model as build_conversion
+    from conversion_model import build_model as build_conversion
     conversion = build_conversion(
         [{"name": "MarineRadar"}, {"name": "Smart Ruler"}, {"name": "GeoAnimator"}],
         {
@@ -139,7 +139,7 @@ def fixture_models():
 
 def render_fixture(digest, model):
     module = "survey" if digest.startswith("survey_") else digest
-    renderer = import_module(f"scripts.{module}.{module}_render")
+    renderer = import_module(f"{module}_render")
     return renderer.render(model)
 
 
@@ -180,17 +180,17 @@ def mobile_fixture_models():
         translate_failed=False,
         translated_body="The map needs more harbor labels and saved routes.",
     )
-    from scripts.survey.survey_model import build_model
+    from survey_model import build_model
 
     timestamp = "2026-10-21 10:30:00"
     survey_rows = {
         "survey_measure": {
-            "Form_Responses5": [
+            "D2": [
                 [timestamp, "", "pro", "Yes, first try", ""],
                 [timestamp, "", "free", "Not yet", "Could not find a flat surface"],
             ],
-            "Form_Responses4": [[timestamp, "", "pro", "Furniture", "Photos", "PDF"]],
-            "Form_Responses6": [[timestamp, "", "free", "Slow measurements", "Saved rooms", "Every day"]],
+            "D15": [[timestamp, "", "pro", "Furniture", "Photos", "PDF"]],
+            "D30": [[timestamp, "", "free", "Slow measurements", "Saved rooms", "Every day"]],
         },
         "survey_marine": {
             "D30 Survey": [
@@ -247,4 +247,4 @@ if __name__ == "__main__":
     elif len(sys.argv) == 2:
         write_previews(sys.argv[1])
     else:
-        raise SystemExit("Usage: python3 tests/render_fixtures.py [--mobile] <output-directory>")
+        raise SystemExit("Usage: python3 scripts/common/digest_render_fixtures.py [--mobile] <output-directory>")

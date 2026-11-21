@@ -8,9 +8,9 @@ import os
 import unittest
 from unittest.mock import patch
 
-from scripts.reviews import reviews_main, reviews_model, reviews_render
-from scripts.survey import survey_fetch
-from test_strict_render import Document
+import reviews_main, reviews_model, reviews_render
+import survey_fetch
+from test_digest_strict_render import Document
 
 
 SHORT = "até é bom"

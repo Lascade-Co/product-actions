@@ -1,9 +1,9 @@
 """The header summary keeps every app's current rate visible at a glance."""
 import unittest
 
-from render_fixtures import fixture_models
-from test_strict_render import render_tree
-from scripts.common import email_shell as shell
+from digest_render_fixtures import fixture_models
+from test_digest_strict_render import render_tree
+import email_shell as shell
 
 
 class ConversionSummaryTests(unittest.TestCase):

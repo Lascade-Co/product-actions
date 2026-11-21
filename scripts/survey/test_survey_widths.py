@@ -1,9 +1,9 @@
 """Reserve enough mobile table width for complete survey header words."""
 import unittest
 
-from render_fixtures import fixture_models, mobile_fixture_models, render_fixture
-from scripts.survey import survey_render
-from test_strict_render import Document
+from digest_render_fixtures import fixture_models, mobile_fixture_models, render_fixture
+import survey_render
+from test_digest_strict_render import Document
 
 
 class SurveyWidthTests(unittest.TestCase):

@@ -11,9 +11,9 @@ import unittest
 from unittest.mock import patch
 from urllib.parse import quote
 
-from scripts.reviews import reviews_fetch, reviews_main
+import reviews_fetch, reviews_main
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 START = datetime.fromtimestamp(1000, timezone.utc)
 END = datetime.fromtimestamp(2000, timezone.utc)
 SA = base64.b64encode(b'{"type":"service_account","client_email":"fixture@example.test"}').decode()

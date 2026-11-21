@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pure MarineRadar revenue renderer built on the shared email shell."""
-from scripts.common import email_shell as shell
-from scripts.revenue.revenue_model import format_money
+import email_shell as shell
+from revenue_model import format_money
 
 STRIPE_DASHBOARD = "https://dashboard.stripe.com/payments"
 

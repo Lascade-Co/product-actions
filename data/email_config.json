@@ -13,7 +13,7 @@
         ]
       },
       "name": "MarineRadar web revenue",
-      "module": "scripts.revenue.revenue_main",
+      "module": "revenue_main",
       "extra_args": []
     },
     "reviews": {
@@ -29,7 +29,7 @@
         ]
       },
       "name": "App reviews",
-      "module": "scripts.reviews.reviews_main",
+      "module": "reviews_main",
       "extra_args": [
         "--apps",
         "data/reviews_apps.json"
@@ -47,7 +47,7 @@
         ]
       },
       "name": "MarineRadar surveys",
-      "module": "scripts.survey.survey_main",
+      "module": "survey_main",
       "extra_args": [
         "--digest",
         "survey_marine",
@@ -66,7 +66,7 @@
         ]
       },
       "name": "Smart Ruler surveys",
-      "module": "scripts.survey.survey_main",
+      "module": "survey_main",
       "extra_args": [
         "--digest",
         "survey_measure",
@@ -87,7 +87,7 @@
         ]
       },
       "name": "GeoAnimator feedback",
-      "module": "scripts.survey.survey_main",
+      "module": "survey_main",
       "extra_args": [
         "--digest",
         "survey_geo",
@@ -106,7 +106,7 @@
         ]
       },
       "name": "Install → Paid",
-      "module": "scripts.conversion.conversion_main",
+      "module": "conversion_main",
       "extra_args": [
         "--apps",
         "data/conversion_apps.json"
@@ -124,7 +124,7 @@
         ]
       },
       "name": "Container tracking credits",
-      "module": "scripts.container_credits.container_credits_main",
+      "module": "container_credits_main",
       "extra_args": [
         "--products",
         "data/container_credits.json"
@@ -134,7 +134,7 @@
       "sender": "Angel Rose",
       "reply_to": "connect@marineradar.com",
       "name": "Incomplete checkout outreach",
-      "module": "scripts.incomplete_checkout.main",
+      "module": "ic_main",
       "extra_args": [],
       "_note": "Sends individual emails to each incomplete customer; recipients are dynamic from Stripe, not from this config"
     }

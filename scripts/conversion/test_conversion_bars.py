@@ -2,9 +2,9 @@
 from datetime import date, timedelta
 import unittest
 
-from render_fixtures import fixture_models, render_fixture
-from scripts.conversion import conversion_render
-from test_strict_render import Document, render_tree
+from digest_render_fixtures import fixture_models, render_fixture
+import conversion_render
+from test_digest_strict_render import Document, render_tree
 
 
 HEADING_FONT = "'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif"

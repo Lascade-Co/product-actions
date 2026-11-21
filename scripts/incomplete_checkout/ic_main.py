@@ -21,9 +21,9 @@ import sys
 if __package__ in (None, ""):
     sys.path.insert(0, str(ROOT))
 
-from scripts.common.delivery import load_config, mask
-from scripts.incomplete_checkout.fetch import fetch_incomplete_customers
-from scripts.incomplete_checkout.render import render
+from delivery import load_config, mask
+from ic_fetch import fetch_incomplete_customers
+from ic_render import render
 
 IST = ZoneInfo("Asia/Kolkata")
 SEND_URL = "https://api.resend.com/emails"

@@ -4,7 +4,7 @@ from html import escape
 from math import ceil
 import re
 
-from scripts.common import email_shell as shell
+import email_shell as shell
 
 
 _LANGUAGES = {

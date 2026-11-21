@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Pure data model for the container tracking credit digest. No I/O, no clock."""
-from scripts.common.dates import SHORT_MONTHS, long_date
+from dates import SHORT_MONTHS, long_date
 
 
 def format_money(amount):

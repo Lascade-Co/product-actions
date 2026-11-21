@@ -16,12 +16,12 @@ from pathlib import Path
 import sys
 from unittest.mock import patch
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from scripts.reviews import reviews_model
-from scripts.survey.survey_fetch import translate_text
-from scripts.survey.survey_model import detect_and_translate
+import reviews_model
+from survey_fetch import translate_text
+from survey_model import detect_and_translate
 from translation_cases import CHINESE_CASE, LIVE_CASES, MOMENT, review_inputs
 
 

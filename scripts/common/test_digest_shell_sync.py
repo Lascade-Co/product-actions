@@ -3,9 +3,9 @@ from hashlib import sha256
 from pathlib import Path
 import unittest
 
-from test_strict_render import Document
-from render_fixtures import mobile_fixture_models, render_fixture
-from scripts.common import email_shell as shell
+from test_digest_strict_render import Document
+from digest_render_fixtures import mobile_fixture_models, render_fixture
+import email_shell as shell
 
 
 class ShellSyncTests(unittest.TestCase):

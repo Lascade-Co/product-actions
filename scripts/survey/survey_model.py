@@ -2,7 +2,7 @@
 """Filter, translate, and group survey responses for the email model."""
 from collections import Counter
 from datetime import datetime, timedelta, timezone
-from scripts.common.dates import SHORT_MONTHS, long_date
+from dates import SHORT_MONTHS, long_date
 
 _TIMESTAMP_FMTS = [
     "%m/%d/%Y %H:%M:%S",

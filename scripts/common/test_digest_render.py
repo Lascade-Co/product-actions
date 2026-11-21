@@ -1,7 +1,7 @@
 """Renderer behavior: metric tails, safe text, and usable email structure."""
 import unittest
 
-from render_fixtures import fixture_models, render_fixture
+from digest_render_fixtures import fixture_models, render_fixture
 
 
 class RenderTests(unittest.TestCase):

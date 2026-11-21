@@ -5,7 +5,7 @@ import logging
 import re
 import urllib.request
 
-from scripts.common.dates import SHORT_MONTHS, long_date
+from dates import SHORT_MONTHS, long_date
 
 
 log = logging.getLogger(__name__)

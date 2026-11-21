@@ -1,8 +1,8 @@
 """Keep survey fields and response counts readable in narrow email clients."""
 import unittest
 
-from scripts.survey import survey_render
-from test_strict_render import Document
+import survey_render
+from test_digest_strict_render import Document
 
 
 def response_section(columns, rows, has_status=False):

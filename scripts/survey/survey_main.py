@@ -14,13 +14,13 @@ ROOT = Path(__file__).resolve().parents[2]
 if __package__ in (None, ""):
     sys.path.insert(0, str(ROOT))
 
-from scripts.common.dates import report_date_for, subject, window_for
-from scripts.common.delivery import load_config, mask, send_digest, write_preview
-from scripts.survey.survey_fetch import fetch_sheet_tab, translate_text, FetchError
-from scripts.survey.survey_model import build_model
-from scripts.survey.survey_render import render
-from scripts.survey.posthog_fetch import fetch_responses, transform_to_tabs
-from scripts.survey.posthog_fetch import FetchError as PostHogFetchError
+from dates import report_date_for, subject, window_for
+from delivery import load_config, mask, send_digest, write_preview
+from survey_fetch import fetch_sheet_tab, translate_text, FetchError
+from survey_model import build_model
+from survey_render import render
+from posthog_fetch import fetch_responses, transform_to_tabs
+from posthog_fetch import FetchError as PostHogFetchError
 
 
 def _google_settings():

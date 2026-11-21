@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pure container tracking credit purchase renderer built on the shared email shell."""
-from scripts.common import email_shell as shell
-from scripts.container_credits.container_credits_model import format_money, format_num
+import email_shell as shell
+from container_credits_model import format_money, format_num
 
 ADAPTY_DASHBOARD = "https://app.adapty.io"
 

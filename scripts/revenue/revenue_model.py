@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pure data model for the revenue digest. No I/O, no clock."""
 from collections import defaultdict
-from scripts.common.dates import SHORT_MONTHS, long_date
+from dates import SHORT_MONTHS, long_date
 
 
 def format_money(amount):

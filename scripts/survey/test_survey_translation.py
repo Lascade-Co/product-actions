@@ -11,10 +11,10 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from scripts.survey import survey_fetch, survey_main, survey_model, survey_render
+import survey_fetch, survey_main, survey_model, survey_render
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 START = datetime(2026, 11, 4, tzinfo=timezone.utc)
 END = datetime(2026, 11, 5, tzinfo=timezone.utc)
 STAMP = "2026-11-04T16:00:00Z"

@@ -12,11 +12,11 @@ ROOT = Path(__file__).resolve().parents[2]
 if __package__ in (None, ""):
     sys.path.insert(0, str(ROOT))
 
-from scripts.common.dates import report_date_for, subject, window_for
-from scripts.common.delivery import load_config, mask, send_digest, write_preview
-from scripts.container_credits.container_credits_fetch import fetch_credit_revenue
-from scripts.container_credits.container_credits_model import build_model
-from scripts.container_credits.container_credits_render import render
+from dates import report_date_for, subject, window_for
+from delivery import load_config, mask, send_digest, write_preview
+from container_credits_fetch import fetch_credit_revenue
+from container_credits_model import build_model
+from container_credits_render import render
 
 
 def main(argv=None):

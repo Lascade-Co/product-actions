@@ -3,7 +3,7 @@
 
 from datetime import date
 
-from scripts.common.dates import SHORT_MONTHS, long_date
+from dates import SHORT_MONTHS, long_date
 
 
 def format_pct(rate):

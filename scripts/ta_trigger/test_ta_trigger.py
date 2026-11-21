@@ -7,8 +7,8 @@ from pathlib import Path
 
 import yaml
 
-from scripts.common import catchup_gate as gate
-from scripts.ta_trigger import trigger as T
+import gate as gate
+import ta_trigger as T
 
 
 def utc(text):
@@ -258,7 +258,7 @@ class ChainTests(unittest.TestCase):
 
 class WorkflowTests(unittest.TestCase):
     def setUp(self):
-        path = Path(__file__).resolve().parents[1] / ".github/workflows/ta-digest-trigger.yml"
+        path = Path(__file__).resolve().parents[2] / ".github/workflows/ta-digest-trigger.yml"
         self.wf = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
 
     def test_token_is_bound_only_to_the_dated_deliver_step(self):

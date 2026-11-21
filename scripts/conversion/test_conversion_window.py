@@ -6,9 +6,9 @@ import os
 import unittest
 from unittest.mock import patch
 
-from scripts.conversion import conversion_main
-from scripts.conversion.conversion_model import build_model
-from scripts.conversion.conversion_render import render
+import conversion_main
+from conversion_model import build_model
+from conversion_render import render
 
 NOW = datetime(2026, 10, 21, 12, tzinfo=timezone.utc)
 APPS = [{"name": "MarineRadar"}]

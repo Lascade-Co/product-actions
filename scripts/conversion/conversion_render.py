@@ -2,8 +2,8 @@
 """Pure install-to-paid renderer with the shared shell and cohort charts."""
 from html import escape
 
-from scripts.common import email_shell as shell
-from scripts.conversion.conversion_model import format_pct, format_num, format_cohort_date
+import email_shell as shell
+from conversion_model import format_pct, format_num, format_cohort_date
 
 ADAPTY_DASHBOARD = "https://app.adapty.io"
 

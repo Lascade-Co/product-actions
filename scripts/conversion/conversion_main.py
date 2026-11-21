@@ -12,11 +12,11 @@ ROOT = Path(__file__).resolve().parents[2]
 if __package__ in (None, ""):
     sys.path.insert(0, str(ROOT))
 
-from scripts.common.dates import report_date_for, subject, window_for
-from scripts.common.delivery import load_config, mask, send_digest, write_preview
-from scripts.conversion.conversion_fetch import fetch_install_to_paid
-from scripts.conversion.conversion_model import build_model
-from scripts.conversion.conversion_render import render
+from dates import report_date_for, subject, window_for
+from delivery import load_config, mask, send_digest, write_preview
+from conversion_fetch import fetch_install_to_paid
+from conversion_model import build_model
+from conversion_render import render
 
 LOOKBACK_DAYS = 14
 

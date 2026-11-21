@@ -1,7 +1,7 @@
 import unittest
 from datetime import date
 
-from scripts.common.dates import subject
+from dates import subject
 
 
 class SubjectTests(unittest.TestCase):

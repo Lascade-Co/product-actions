@@ -11,8 +11,8 @@ from unittest.mock import patch
 
 import live_translation_check as live
 from translation_cases import LIVE_CASES, REVIEW_CASES
-from scripts.reviews import reviews_model
-from scripts.survey import survey_fetch
+import reviews_model
+import survey_fetch
 
 
 class LiveTranslationCheckTests(unittest.TestCase):
@@ -109,7 +109,7 @@ class LiveTranslationCheckTests(unittest.TestCase):
 class LiveWorkflowTests(unittest.TestCase):
     def test_manual_workflow_has_full_checkout_and_only_translation_secrets(self):
         import yaml
-        path = Path(__file__).resolve().parents[1] / ".github/workflows/live-translation-check.yml"
+        path = Path(__file__).resolve().parents[2] / ".github/workflows/live-translation-check.yml"
         self.assertTrue(path.exists(), "Standalone live check workflow is missing")
         workflow = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
         self.assertEqual(set(workflow["on"]), {"workflow_dispatch"})
