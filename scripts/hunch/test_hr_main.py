@@ -25,19 +25,19 @@ def test_build_deadline_matches_pacific_schedule(date, started, expected):
     assert (deadline.isoformat() if deadline else None) == expected
 
 
-def test_main_builds_real_fixture_json_without_printing_figures(monkeypatch, tmp_path, capsys):
+def test_main_builds_fixture_json_without_printing_figures(monkeypatch, tmp_path, capsys):
     import hr_main as M
 
     monkeypatch.setenv("POSTHOG_PERSONAL_API_KEY", "fixture-key")
     monkeypatch.delenv("CLAUDE_API_KEY", raising=False)
     monkeypatch.setenv("HR_TEST_NUMBER", "42")
-    monkeypatch.setattr(M, "utc_now", lambda: dt.datetime(2026, 11, 19, 14, tzinfo=UTC))
+    monkeypatch.setattr(M, "utc_now", lambda: dt.datetime(2026, 11, 23, 14, tzinfo=UTC))
     monkeypatch.setattr(M.F, "fetch_all", lambda report_date, deadline=None: preview_inputs())
     assert M.main(["--report-date", str(REPORT_DATE), "--out", str(tmp_path), "--dry-run"]) == 0
     email = json.loads((tmp_path / "email.json").read_text())
     assert set(email) == {"subject", "html", "text"}
     assert email["subject"].startswith("[Test 42] TreasureHunch")
-    assert "8.6%" in email["html"]
+    assert "30%" in email["html"]
     assert "Summary unavailable today." in email["html"]
     captured = capsys.readouterr()
     assert captured.out == "summary: fallback:auth\nrendered\n"
@@ -45,11 +45,27 @@ def test_main_builds_real_fixture_json_without_printing_figures(monkeypatch, tmp
     assert not re.search(r"\d", captured.out)
 
 
+def test_main_renders_only_the_two_approved_sentences(monkeypatch, tmp_path, capsys):
+    import hr_main as M
+
+    monkeypatch.setenv("POSTHOG_PERSONAL_API_KEY", "fixture-key")
+    monkeypatch.delenv("HR_TEST_NUMBER", raising=False)
+    monkeypatch.setattr(M, "utc_now", lambda: dt.datetime(2026, 11, 23, 14, tzinfo=UTC))
+    monkeypatch.setattr(M.F, "fetch_all", lambda report_date, deadline=None: preview_inputs())
+    monkeypatch.setattr(M.C, "generate_text", lambda *a, **k: '{"pick":["new_down","act_ads"]}')
+    assert M.main(["--report-date", str(REPORT_DATE), "--out", str(tmp_path), "--dry-run"]) == 0
+    email = json.loads((tmp_path / "email.json").read_text())
+    summary = "New players are down on last week. Check with Jishnu whether the ads are running."
+    assert summary in email["html"] and summary in email["text"]
+    assert '"pick"' not in email["html"]
+    assert capsys.readouterr() == ("summary: ok\nrendered\n", "")
+
+
 def test_main_missing_posthog_key_fails_safely(monkeypatch, tmp_path, capsys):
     import hr_main as M
 
     monkeypatch.delenv("POSTHOG_PERSONAL_API_KEY", raising=False)
-    assert M.main(["--report-date", "2026-11-19", "--out", str(tmp_path)]) != 0
+    assert M.main(["--report-date", "2026-11-19", "--out", str(tmp_path)]) == 2
     captured = capsys.readouterr()
     assert captured.out + captured.err == "posthog-key-missing\n"
     assert not (tmp_path / "email.json").exists()
@@ -65,7 +81,7 @@ def test_main_does_not_expose_unexpected_fetch_errors(monkeypatch, tmp_path, cap
         raise RuntimeError("private query body: 675 players")
 
     monkeypatch.setattr(M.F, "fetch_all", fail)
-    assert M.main(["--report-date", "2026-11-19", "--out", str(tmp_path)]) != 0
+    assert M.main(["--report-date", "2026-11-19", "--out", str(tmp_path)]) == 1
     captured = capsys.readouterr()
     assert captured.out + captured.err == "build-failed\n"
     assert not (tmp_path / "email.json").exists()
@@ -76,7 +92,7 @@ def test_main_rejects_a_report_before_the_pacific_cutoff(monkeypatch, tmp_path, 
 
     monkeypatch.setenv("POSTHOG_PERSONAL_API_KEY", "fixture-key")
     monkeypatch.setattr(M, "utc_now", lambda: dt.datetime(2026, 11, 19, 12, 59, tzinfo=UTC))
-    assert M.main(["--report-date", "2026-11-19", "--out", str(tmp_path)]) != 0
+    assert M.main(["--report-date", "2026-11-19", "--out", str(tmp_path)]) == 2
     captured = capsys.readouterr()
     assert captured.out + captured.err == "report-not-ready\n"
 
@@ -93,7 +109,7 @@ def test_main_stops_after_fetch_crosses_the_build_deadline(monkeypatch, tmp_path
         return preview_inputs()
 
     monkeypatch.setattr(M.F, "fetch_all", fetch)
-    assert M.main(["--report-date", "2026-11-19", "--out", str(tmp_path)]) != 0
+    assert M.main(["--report-date", "2026-11-19", "--out", str(tmp_path)]) == 3
     captured = capsys.readouterr()
     assert captured.out + captured.err == "deadline\n"
     assert not (tmp_path / "email.json").exists()
@@ -103,7 +119,7 @@ def test_stalled_summary_leaves_time_to_render_fallback(monkeypatch, tmp_path, c
     """An API stream reaching its alarm must not consume the build deadline."""
     import hr_main as M
 
-    now = [dt.datetime(2026, 11, 19, 13, 5, tzinfo=UTC)]
+    now = [dt.datetime(2026, 11, 23, 13, 5, tzinfo=UTC)]
     active_deadline = [None]
     monkeypatch.setenv("POSTHOG_PERSONAL_API_KEY", "fixture-key")
     monkeypatch.delenv("HR_TEST_NUMBER", raising=False)
@@ -122,10 +138,10 @@ def test_stalled_summary_leaves_time_to_render_fallback(monkeypatch, tmp_path, c
 
     monkeypatch.setattr(M.F, "absolute_deadline", deadline_guard)
     monkeypatch.setattr(M.C, "generate_text", stalled_api)
-    assert M.main(["--report-date", "2026-11-19", "--out", str(tmp_path)]) == 0
+    assert M.main(["--report-date", str(REPORT_DATE), "--out", str(tmp_path)]) == 0
     email = json.loads((tmp_path / "email.json").read_text())
     assert "Summary unavailable today." in email["html"]
-    assert "8.6%" in email["html"]
+    assert "30%" in email["html"]
     captured = capsys.readouterr()
     assert captured.out == "summary: fallback:deadline\nrendered\n"
     assert captured.err == ""
