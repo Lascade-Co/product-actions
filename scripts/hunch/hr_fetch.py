@@ -30,11 +30,10 @@ class FetchError(Exception):
 
 def query_sql(report_date: dt.date) -> dict[str, str]:
     """The report's last full UTC day is the day before its Pacific send date."""
-    last = report_date - dt.timedelta(days=1)
-    start = last - dt.timedelta(days=7)
+    start = report_date - dt.timedelta(days=15)
     cutoff = f"toDateTime('{report_date.isoformat()} 00:00:00', 'UTC')"
     return {
-        "groups": f"""
+        "cohorts": f"""
 WITH p AS (
     SELECT person_id,
            groupUniqArray(toDate(toTimeZone(timestamp, 'UTC'))) AS days,
@@ -45,63 +44,60 @@ WITH p AS (
       AND timestamp >= toDateTime('2026-10-31 00:00:00', 'UTC')
       AND timestamp < {cutoff}
     GROUP BY person_id
-), dp AS (
-    SELECT DISTINCT person_id
-    FROM events
-    WHERE event = 'hunt_completed' AND properties.mode = 'daily'
-      AND timestamp < {cutoff}
 )
 SELECT d0, count() AS n,
        countIf(has(days, d0 + 1)) AS d1,
-       countIf(arrayExists(x -> x > d0 and x <= d0 + 3, days)) AS d3,
-       countIf(arrayExists(x -> x > d0 and x <= d0 + 7, days)) AS d7any,
        countIf(has(days, d0 + 7)) AS d7,
-       countIf(length(days) >= 3) AS days3,
-       countIf(med = 'paid') AS paid,
-       countIf(arrayExists(x -> x > d0, days)) AS returned,
-       countIf(arrayExists(x -> x > d0, days)
-               and person_id in (select person_id from dp)) AS returned_daily
+       countIf(has(days, d0 + 15)) AS d15,
+       countIf(has(days, d0 + 30)) AS d30,
+       countIf(med = 'paid') AS paid
 FROM p
 GROUP BY d0
 ORDER BY d0
 LIMIT {QUERY_LIMIT}
 """.strip(),
         "days": f"""
+WITH first_plays AS (
+    SELECT person_id,
+           min(toDate(toTimeZone(timestamp, 'UTC'))) AS d0,
+           argMin(ifNull(toString(properties.utm_medium), ''), timestamp) AS med
+    FROM events
+    WHERE event = 'hunt_started'
+      AND timestamp >= toDateTime('2026-10-31 00:00:00', 'UTC')
+      AND timestamp < {cutoff}
+    GROUP BY person_id
+)
 SELECT toDate(toTimeZone(timestamp, 'UTC')) AS day,
-       uniqExact(person_id) AS people,
-       uniqExactIf(person_id, event = 'hunt_started') AS players,
-       countIf(event = 'hunt_started') AS hunts,
-       countIf(event = 'hunt_completed') AS finished,
-       countIf(event = 'hunt_completed' AND properties.outcome = 'won') AS won,
-       uniqExactIf(person_id, event = 'hunt_completed' AND properties.mode = 'daily') AS daily_players
+       uniqExactIf(events.person_id, event = 'hunt_started') AS players,
+       uniqExactIf(events.person_id, event = 'hunt_started' AND first_plays.d0 = day) AS new_players,
+       uniqExactIf(events.person_id, event = 'hunt_started' AND first_plays.d0 = day AND first_plays.med = 'paid') AS new_paid,
+       uniqExactIf(events.person_id, event = 'hunt_completed' AND properties.mode = 'daily') AS daily_players
 FROM events
-WHERE timestamp >= toDateTime('{start.isoformat()} 00:00:00', 'UTC')
+LEFT JOIN first_plays ON events.person_id = first_plays.person_id
+WHERE event IN ('hunt_started', 'hunt_completed')
+  AND timestamp >= toDateTime('{start.isoformat()} 00:00:00', 'UTC')
   AND timestamp < {cutoff}
 GROUP BY day
 ORDER BY day
 LIMIT {QUERY_LIMIT}
 """.strip(),
-        "new_events": f"""
-SELECT event
-FROM events
-WHERE timestamp >= toDateTime('2026-10-29 00:00:00', 'UTC')
-  AND timestamp < {cutoff}
-GROUP BY event
-HAVING toDate(toTimeZone(min(timestamp), 'UTC')) = toDate('{last.isoformat()}')
-ORDER BY event
-LIMIT {QUERY_LIMIT}
-""".strip(),
-        "new_versions": f"""
-SELECT toDate(toTimeZone(min(timestamp), 'UTC')) AS day,
-       ifNull(toString(properties.platform), '') AS platform,
-       ifNull(toString(properties.app_version), '') AS version
-FROM events
-WHERE timestamp >= toDateTime('2026-10-29 00:00:00', 'UTC')
-  AND timestamp < {cutoff}
-  AND ifNull(toString(properties.app_version), '') != ''
-GROUP BY platform, version
-HAVING day >= toDate('2026-11-08')
-ORDER BY day, platform, version
+        "streaks": f"""
+SELECT day,
+       countIf(streak >= 2) AS streak2,
+       countIf(streak >= 7) AS streak7,
+       max(streak) AS longest
+FROM (
+    SELECT toDate(toTimeZone(timestamp, 'UTC')) AS day,
+           person_id,
+           max(toInt64OrZero(toString(properties.streak))) AS streak
+    FROM events
+    WHERE event = 'hunt_completed' AND properties.mode = 'daily'
+      AND timestamp >= toDateTime('{start.isoformat()} 00:00:00', 'UTC')
+      AND timestamp < {cutoff}
+    GROUP BY day, person_id
+)
+GROUP BY day
+ORDER BY day
 LIMIT {QUERY_LIMIT}
 """.strip(),
     }
@@ -249,15 +245,11 @@ def make_runner(key: str, retries: int = 4, poll_s: float = 4,
 
 
 def fetch_all(report_date: dt.date, deadline: dt.datetime | None = None) -> dict:
-    """Fetch player groups, eight engagement days and first-seen events/versions."""
+    """Fetch first-play cohorts and fifteen complete UTC days of play and streaks."""
     key = os.environ.get("POSTHOG_PERSONAL_API_KEY", "").strip()
     if not key:
         raise FetchError("posthog-key-missing")
     run = make_runner(key, deadline=deadline)
     data = {name: run(sql) for name, sql in query_sql(report_date).items()}
-    try:
-        data["new_events"] = [row["event"] for row in data["new_events"]]
-    except (KeyError, TypeError):
-        raise FetchError("posthog-invalid-response") from None
     check_deadline(deadline)
     return data

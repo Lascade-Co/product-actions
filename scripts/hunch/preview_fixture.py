@@ -1,51 +1,39 @@
-"""Approved preview inputs, retained as a deterministic regression fixture."""
-from datetime import date
+"""Synthetic executive-brief fixture; run this file to render without any API."""
+from datetime import date, timedelta
+from pathlib import Path
+import sys
 
-
-REPORT_DATE = date(2026, 11, 19)
-GROUP_COUNTS = {
-    "2026-10-31": (11, 0, 0, 0, 0, 0, 10, 0, 0),
-    "2026-11-01": (38, 1, 2, 2, 0, 0, 37, 4, 2),
-    "2026-11-02": (38, 1, 2, 2, 0, 0, 38, 4, 2),
-    "2026-11-03": (19, 2, 3, 3, 0, 2, 19, 3, 2),
-    "2026-11-04": (15, 0, 0, 1, 0, 0, 14, 1, 1),
-    "2026-11-05": (32, 1, 2, 2, 0, 0, 30, 3, 1),
-    "2026-11-06": (29, 0, 0, 1, 0, 0, 27, 1, 1),
-    "2026-11-07": (16, 1, 1, 1, 0, 0, 16, 1, 0),
-    "2026-11-08": (17, 4, 5, 6, 1, 4, 16, 6, 6),
-    "2026-11-09": (27, 2, 3, 5, 0, 2, 24, 5, 4),
-    "2026-11-10": (13, 5, 5, 6, 0, 0, 13, 6, 5),
-    "2026-11-11": (92, 10, 14, 16, 1, 6, 89, 16, 12),
-    "2026-11-12": (116, 13, 15, 16, 0, 7, 113, 16, 13),
-    "2026-11-13": (138, 15, 21, 21, 0, 5, 132, 21, 19),
-    "2026-11-14": (110, 6, 10, 10, 0, 3, 104, 10, 10),
-    "2026-11-15": (111, 9, 11, 11, 0, 1, 106, 11, 11),
-    "2026-11-16": (99, 4, 4, 4, 0, 1, 94, 4, 4),
-    "2026-11-17": (9, 1, 1, 1, 0, 0, 1, 1, 1),
-    "2026-11-18": (5, 0, 0, 0, 0, 0, 0, 0, 0),
-}
-DAY_COUNTS = {
-    "2026-11-12": (226, 130, 777, 707, 653, 75),
-    "2026-11-13": (286, 163, 932, 851, 809, 92),
-    "2026-11-14": (244, 141, 650, 574, 542, 74),
-    "2026-11-15": (231, 132, 751, 682, 653, 75),
-    "2026-11-16": (267, 133, 514, 462, 426, 72),
-    "2026-11-17": (35, 18, 53, 53, 51, 17),
-    "2026-11-18": (33, 15, 66, 61, 59, 12),
-}
-NEW_EVENTS = ["Application Installed", "Application Opened", "Application Backgrounded"]
-NEW_VERSIONS = [
-    {"day": "2026-11-18", "platform": "Android", "version": "0.1.1"},
-    {"day": "2026-11-18", "platform": "iOS", "version": "0.1.2"},
-]
+REPORT_DATE = date(2026, 11, 23)
 
 
 def preview_inputs():
-    group_fields = ("n", "d1", "d3", "d7any", "d7", "days3", "paid", "returned", "returned_daily")
-    day_fields = ("people", "players", "hunts", "finished", "won", "daily_players")
-    return {
-        "groups": [{"d0": day, **dict(zip(group_fields, counts))} for day, counts in GROUP_COUNTS.items()],
-        "days": [{"day": day, **dict(zip(day_fields, counts))} for day, counts in DAY_COUNTS.items()],
-        "new_events": NEW_EVENTS.copy(),
-        "new_versions": [row.copy() for row in NEW_VERSIONS],
-    }
+    cohorts = []
+    for offset in range(16):
+        day = date(2026, 10, 31) + timedelta(days=offset)
+        cohorts.append({"d0": day.isoformat(), "n": 40, "d1": 12, "d7": 4,
+                        "d15": 2, "d30": 0, "paid": 32})
+    days, streaks = [], []
+    for offset in range(15):
+        day = date(2026, 11, 8) + timedelta(days=offset)
+        earlier = day <= date(2026, 11, 15)
+        days.append({"day": day.isoformat(), "players": 45 if earlier else 13,
+                     "new_players": 40 if earlier else 0, "new_paid": 32 if earlier else 0,
+                     "daily_players": 20 if earlier else 8})
+        streaks.append({"day": day.isoformat(), "streak2": 4 if earlier else 5,
+                        "streak7": 1 if earlier else 2, "longest": max(2, offset - 1)})
+    return {"cohorts": cohorts, "days": days, "streaks": streaks}
+
+
+def render_preview(output):
+    from hr_model import build_model
+    from hr_render_email import render
+
+    model = build_model(REPORT_DATE, **preview_inputs())
+    approved = {statement["id"]: statement["text"] for statement in model["statements"]}
+    model["summary"] = approved["new_down"] + " " + approved["act_ads"]
+    _, html, _ = render(model)
+    Path(output).write_text(html, encoding="utf-8")
+
+
+if __name__ == "__main__":
+    render_preview(sys.argv[1] if len(sys.argv) > 1 else "/tmp/hunch-lane-preview.html")

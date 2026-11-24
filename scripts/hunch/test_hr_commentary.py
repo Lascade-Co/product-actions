@@ -1,115 +1,207 @@
-"""The optional summary may not invent quantities or leak API failures."""
+"""The model chooses approved statements; its prose never reaches the email."""
 import datetime as dt
+import json
 
 import pytest
 
 
-FACTS = {
-    "new_players": 5,
-    "traffic_median": 244,
-    "next_day_pct": 8.6,
-    "since_release_pct": 9.4,
-    "stop_line_pct": 15,
-    "returners": 96,
-    "daily_returners": 85,
-    "daily_returners_pct": 88.5416666667,
-}
-GOOD = (
-    "New players fell to 5 while next-day return remains below the 15% stop line. "
-    "The latest groups returned at 8.6%, with no real change from the previous groups. "
-    "Since the release, next-day return is 9.4%, still short of the level that supports continuing. "
-    "The daily puzzle reached 85 of 96 returning players, or 89%, while recent groups are too small to read. "
-    "Check whether the paid campaign is still running."
+STATEMENTS = [
+    {
+        "id": "new_down",
+        "kind": "fact",
+        "text": "New players are down on last week.",
+        "actions": ["act_ads"],
+    },
+    {
+        "id": "streak7_up",
+        "kind": "fact",
+        "text": "More players kept a week-long streak.",
+        "actions": ["act_none"],
+    },
+    {
+        "id": "act_ads",
+        "kind": "action",
+        "text": "Check with Jishnu whether the ads are running.",
+    },
+    {
+        "id": "act_none",
+        "kind": "action",
+        "text": "Nothing to act on today.",
+    },
+]
+GOOD_PICK = '{"pick":["new_down","act_ads"]}'
+GOOD_SUMMARY = (
+    "New players are down on last week. "
+    "Check with Jishnu whether the ads are running."
 )
 
 
-def test_validator_accepts_factual_counts_and_rounded_percentages():
-    from hr_commentary import validate_summary
+def test_valid_pick_renders_only_the_two_fixed_sentences(monkeypatch, capsys):
+    import hr_commentary as C
 
-    assert validate_summary(GOOD, FACTS) is None
-    assert validate_summary(GOOD.replace("89%", "88.5%"), FACTS) is None
+    calls = []
+
+    def generate(prompt, **kwargs):
+        calls.append((prompt, kwargs))
+        return GOOD_PICK
+
+    monkeypatch.setattr(C, "generate_text", generate)
+    assert C.summarize(STATEMENTS) == GOOD_SUMMARY
+    assert len(calls) == 1
+    assert json.loads(calls[0][0].split("STATEMENTS:\n", 1)[1]) == STATEMENTS
+    assert calls[0][1] == {"max_tokens": 512, "timeout": 90}
+    captured = capsys.readouterr()
+    assert captured.out == "summary: ok\n"
+    assert captured.err == ""
 
 
-@pytest.mark.parametrize("text,reason", [
-    (GOOD.replace("8.6%", "12.7%"), "number"),
-    (GOOD.replace("5 while", "999 while"), "number"),
-    (GOOD.replace("5 while", "5k while"), "number"),
-    (GOOD.replace("5 while", "-5 while"), "number"),
-    (GOOD.replace("5 while", ".5 while"), "number"),
-    (GOOD.replace("New players", "Cherian says new players"), "name"),
-    (GOOD.replace("The latest", "Alice says the latest"), "name"),
-    (GOOD + " https://example.com", "url"),
-    (GOOD.replace("latest", "**latest**"), "markdown"),
-    ("Too short.", "length"),
-    (GOOD * 3, "length"),
-    (GOOD.replace("fell to 5", "fell three times to 5"), "ratio"),
-    (GOOD.replace("fell to 5", "fell to five"), "number"),
-    (GOOD.replace("Check whether", "We should check whether"), "advice"),
-    (GOOD.replace("Check whether", "Check and confirm whether"), "advice"),
-    (GOOD.replace(". ", "; "), "sentences"),
+@pytest.mark.parametrize("response,reason", [
+    ('{"pick":["unknown","act_ads"]}', "unknown"),
+    ('{"pick":["new_down","unknown"]}', "unknown"),
+    ('{"pick":["new_down","new_down"]}', "repeat"),
+    ('{"pick":["new_down","streak7_up"]}', "kind"),
+    ('{"pick":["act_ads","act_none"]}', "kind"),
+    ('{"pick":["act_ads","new_down"]}', "kind"),
+    ('{"pick":["new_down","act_none"]}', "action"),
+    ("private model prose", "json"),
+    ('```json\n{"pick":["new_down","act_ads"]}\n```', "json"),
+    ('{"pick":["new_down","act_ads"]} private prose', "json"),
+    ('["new_down","act_ads"]', "shape"),
+    ('{"pick":["new_down","act_ads"],"text":"private prose"}', "shape"),
+    ('{"pick":"new_down"}', "shape"),
+    ('{"pick":["new_down"]}', "shape"),
+    ('{"pick":["new_down","act_ads","act_none"]}', "shape"),
+    ('{"pick":["new_down",null]}', "shape"),
+    ('{"pick":["new_down",["act_ads"]]}', "shape"),
+    ('{}', "shape"),
 ])
-def test_validator_rejects_unsupported_prose(text, reason):
-    from hr_commentary import validate_summary
-
-    assert validate_summary(text, FACTS) == reason
-
-
-def test_summary_retries_with_only_reason_and_never_logs_facts(monkeypatch, capsys):
+def test_rejected_pick_retries_once_then_falls_back(monkeypatch, capsys, response, reason):
     import hr_commentary as C
 
     prompts = []
 
     def generate(prompt, **kwargs):
         prompts.append(prompt)
-        return GOOD.replace("8.6%", "12.7%") if len(prompts) == 1 else GOOD
+        return response
 
     monkeypatch.setattr(C, "generate_text", generate)
-    assert C.summarize(FACTS) == GOOD
+    assert C.summarize(STATEMENTS) == "Summary unavailable today."
     assert len(prompts) == 2
-    assert "number" in prompts[1]
-    assert "12.7%" not in prompts[1]
-    assert capsys.readouterr().out == "summary: ok\n"
+    assert prompts[1].startswith(prompts[0])
+    assert "Rejected for: " + reason in prompts[1][len(prompts[0]):]
+    assert response not in prompts[1][len(prompts[0]):]
+    captured = capsys.readouterr()
+    assert captured.out == f"summary: fallback:{reason}\n"
+    assert captured.err == ""
 
 
-def test_summary_invalid_twice_falls_back(monkeypatch, capsys):
+def test_valid_retry_renders_fixed_sentences_and_does_not_echo_reply(monkeypatch, capsys):
+    import hr_commentary as C
+
+    prompts = []
+
+    def generate(prompt, **kwargs):
+        prompts.append(prompt)
+        return "private response body" if len(prompts) == 1 else GOOD_PICK
+
+    monkeypatch.setattr(C, "generate_text", generate)
+    assert C.summarize(STATEMENTS) == GOOD_SUMMARY
+    assert len(prompts) == 2
+    assert "Rejected for: json" in prompts[1]
+    assert "private response body" not in prompts[1]
+    captured = capsys.readouterr()
+    assert captured.out == "summary: ok\n"
+    assert captured.err == ""
+
+
+@pytest.mark.parametrize("error,reason", [
+    (RuntimeError("private API body and figures"), "api"),
+    (TimeoutError("private prompt"), "timeout"),
+])
+def test_api_errors_retry_once_and_are_sanitized(monkeypatch, capsys, error, reason):
     import hr_commentary as C
 
     calls = []
 
     def generate(prompt, **kwargs):
         calls.append(prompt)
-        return "secret short summary"
-
-    monkeypatch.setattr(C, "generate_text", generate)
-    assert C.summarize(FACTS) == "Summary unavailable today."
-    assert len(calls) == 2
-    assert capsys.readouterr().out == "summary: fallback:length\n"
-
-
-@pytest.mark.parametrize("error,reason", [
-    (RuntimeError("private API body and 999 people"), "api"),
-    (TimeoutError("private prompt"), "timeout"),
-])
-def test_summary_api_errors_are_optional_and_sanitized(monkeypatch, capsys, error, reason):
-    import hr_commentary as C
-
-    def generate(*args, **kwargs):
         raise error
 
     monkeypatch.setattr(C, "generate_text", generate)
-    assert C.summarize(FACTS) == "Summary unavailable today."
-    assert capsys.readouterr().out == f"summary: fallback:{reason}\n"
+    assert C.summarize(STATEMENTS) == "Summary unavailable today."
+    assert len(calls) == 2
+    assert str(error) not in calls[1]
+    captured = capsys.readouterr()
+    assert captured.out == f"summary: fallback:{reason}\n"
+    assert captured.err == ""
 
 
-def test_summary_missing_credentials_uses_safe_claude_reason(monkeypatch, capsys):
+@pytest.mark.parametrize("error_reason,safe_reason", [
+    ("auth", "auth"),
+    ("timeout", "timeout"),
+    ("rate-limit", "rate"),
+    ("sdk-unavailable", "sdk"),
+    ("private error body", "api"),
+])
+def test_claude_errors_keep_only_safe_reasons(monkeypatch, capsys, error_reason, safe_reason):
+    import hr_commentary as C
+
+    calls = []
+
+    def generate(prompt, **kwargs):
+        calls.append(prompt)
+        raise C.ClaudeError(error_reason)
+
+    monkeypatch.setattr(C, "generate_text", generate)
+    assert C.summarize(STATEMENTS) == "Summary unavailable today."
+    assert len(calls) == 2
+    captured = capsys.readouterr()
+    assert captured.out == f"summary: fallback:{safe_reason}\n"
+    assert captured.err == ""
+
+
+def test_api_failure_can_recover_on_the_one_retry(monkeypatch, capsys):
+    import hr_commentary as C
+
+    calls = []
+
+    def generate(prompt, **kwargs):
+        calls.append(prompt)
+        if len(calls) == 1:
+            raise TimeoutError("private request body")
+        return GOOD_PICK
+
+    monkeypatch.setattr(C, "generate_text", generate)
+    assert C.summarize(STATEMENTS) == GOOD_SUMMARY
+    assert len(calls) == 2
+    assert capsys.readouterr().out == "summary: ok\n"
+
+
+@pytest.mark.parametrize("statements", [[], [STATEMENTS[2]]])
+def test_no_approved_facts_falls_back_without_an_api_request(monkeypatch, capsys, statements):
     import hr_commentary as C
 
     def generate(*args, **kwargs):
-        raise C.ClaudeError("auth")
+        pytest.fail("no fact exists for the model to choose")
 
     monkeypatch.setattr(C, "generate_text", generate)
-    assert C.summarize(FACTS) == "Summary unavailable today."
-    assert capsys.readouterr().out == "summary: fallback:auth\n"
+    assert C.summarize(statements) == C.FALLBACK
+    assert capsys.readouterr().out == "summary: fallback:no-facts\n"
+
+
+def test_unserializable_input_is_optional_and_does_not_leak(monkeypatch, capsys):
+    import hr_commentary as C
+
+    statements = [{**STATEMENTS[0], "text": {"private input"}}]
+
+    def generate(*args, **kwargs):
+        pytest.fail("invalid input should not reach the API")
+
+    monkeypatch.setattr(C, "generate_text", generate)
+    assert C.summarize(statements) == C.FALLBACK
+    captured = capsys.readouterr()
+    assert captured.out == "summary: fallback:invalid\n"
+    assert captured.err == ""
 
 
 def test_summary_skips_when_build_deadline_is_close(monkeypatch, capsys):
@@ -119,6 +211,42 @@ def test_summary_skips_when_build_deadline_is_close(monkeypatch, capsys):
         pytest.fail("summary should not consume the rendering reserve")
 
     monkeypatch.setattr(C, "generate_text", generate)
-    now = dt.datetime(2026, 11, 19, 13, 47, 50, tzinfo=dt.timezone.utc)
-    assert C.summarize(FACTS, deadline=now + dt.timedelta(seconds=10), clock=lambda: now) == C.FALLBACK
+    now = dt.datetime(2026, 11, 23, 13, 47, 50, tzinfo=dt.timezone.utc)
+    assert C.summarize(STATEMENTS, deadline=now + dt.timedelta(seconds=10), clock=lambda: now) == C.FALLBACK
+    assert capsys.readouterr().out == "summary: fallback:deadline\n"
+
+
+def test_request_timeouts_leave_the_sdk_retry_and_rendering_reserve(monkeypatch):
+    import hr_commentary as C
+
+    now = dt.datetime(2026, 11, 23, 13, 47, 50, tzinfo=dt.timezone.utc)
+    times = iter([now, now + dt.timedelta(seconds=15)])
+    calls = []
+
+    def generate(prompt, **kwargs):
+        calls.append(kwargs)
+        return "invalid" if len(calls) == 1 else GOOD_PICK
+
+    monkeypatch.setattr(C, "generate_text", generate)
+    assert C.summarize(STATEMENTS, deadline=now + dt.timedelta(seconds=105), clock=lambda: next(times)) == GOOD_SUMMARY
+    assert calls == [
+        {"max_tokens": 512, "timeout": 30},
+        {"max_tokens": 512, "timeout": 25},
+    ]
+
+
+def test_summary_skips_retry_when_first_request_uses_the_deadline(monkeypatch, capsys):
+    import hr_commentary as C
+
+    now = dt.datetime(2026, 11, 23, 13, 47, 50, tzinfo=dt.timezone.utc)
+    times = iter([now, now + dt.timedelta(seconds=80)])
+    calls = []
+
+    def generate(prompt, **kwargs):
+        calls.append(prompt)
+        return "private invalid response"
+
+    monkeypatch.setattr(C, "generate_text", generate)
+    assert C.summarize(STATEMENTS, deadline=now + dt.timedelta(seconds=105), clock=lambda: next(times)) == C.FALLBACK
+    assert len(calls) == 1
     assert capsys.readouterr().out == "summary: fallback:deadline\n"

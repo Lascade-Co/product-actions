@@ -39,7 +39,7 @@ def _check_deadline(deadline):
         raise F.FetchError("build-deadline")
 
 
-def _summary(facts, deadline):
+def _summary(statements, deadline):
     # The optional API stream gets an earlier absolute deadline. Its timeout
     # only bounds inactivity, so a streaming response can outlive that timeout.
     summary_deadline = deadline - dt.timedelta(seconds=15) if deadline else None
@@ -48,7 +48,7 @@ def _summary(facts, deadline):
         return C.FALLBACK
     try:
         with F.absolute_deadline(summary_deadline):
-            return C.summarize(facts, deadline=summary_deadline, clock=utc_now)
+            return C.summarize(statements, deadline=summary_deadline, clock=utc_now)
     except Exception:
         print("summary: fallback:deadline" if summary_deadline is not None
               and utc_now() >= summary_deadline else "summary: fallback:invalid")
@@ -76,7 +76,7 @@ def main(argv=None):
         # Fetch guards its own calls. Keep this separate to avoid nesting alarms.
         with F.absolute_deadline(deadline):
             model = M.build_model(args.report_date, **raw, test_number=os.environ.get("HR_TEST_NUMBER") or None)
-        model["summary"] = _summary(model["facts"], deadline)
+        model["summary"] = _summary(model["statements"], deadline)
         _check_deadline(deadline)
         with F.absolute_deadline(deadline):
             subject, html, text = R.render(model)
