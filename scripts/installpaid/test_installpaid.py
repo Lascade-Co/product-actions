@@ -585,7 +585,8 @@ def test_early_render_subject_dateline_grid_and_block(tmp_path):
     assert "Early read, provisional: what Mon 19 Oct installs had done by 05:00 PT Tue 20 Oct" in html
     assert "Mon 19 Oct (early)" in html and "No installs yet on Mon 19 Oct." not in html
     assert "Early read, provisional" in text and "Judged on the 7 days, never the single day" not in text
-    assert "measured at the same point" in text
+    assert "measured the same way" not in html + text
+    assert "measured at the same point" not in html + text
 
 
 def test_without_early_the_email_is_unchanged(tmp_path):

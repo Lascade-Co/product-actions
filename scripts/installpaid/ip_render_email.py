@@ -405,8 +405,7 @@ def early_caption(model):
     e = early_of(model)
     label = get_edition(model.get("edition", "pt")).label
     return (f"Early read, provisional: what {day_label(e['day'])} installs had done by 05:00 {label} "
-            f"{day_label(model['report_date'])}. Late events can still change it. Compared with the 7 days before "
-            f"({week_txt(model['first_day'], model['last_day'])}), measured the same way.")
+            f"{day_label(model['report_date'])}. Late events can still change it.")
 
 
 def _early(model):
@@ -655,8 +654,7 @@ def footnote_lines(model, variant="A"):
         f"05:00 {edition.label}.",
         "Better or worse when the 95% interval of the difference excludes zero; otherwise same when the whole interval "
         "lies within ±10% of the benchmark rate; otherwise can't tell yet. " + (
-            ("Verdicts against Mar 2026 / Aug 2025 are judged on the 7 full days; the early read is a separate check of "
-             "the newest day against the 7 days before it, measured at the same point."
+            ("Verdicts against Mar 2026 / Aug 2025 are judged on the 7 full days."
              if early_of(model) else "Verdicts are judged on the 7 days.") +
             (" The bars and their Mar/Aug colours show the latest full day only, so they are noisier."
              if variant == "A" else "" if early_of(model) else " Never the single day.")),
