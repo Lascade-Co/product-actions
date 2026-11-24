@@ -11,6 +11,8 @@ import re
 import sys
 from contextlib import redirect_stdout, redirect_stderr
 
+import pytest
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import ip_fetch as F  # noqa: E402
@@ -250,7 +252,7 @@ def test_render_variant_a(tmp_path):
     assert "4.0.x" not in subj + html + text
     assert "<img" not in html and not imgs
     assert "App Store · iOS" in html and "Play Store · Android 5.x" in text
-    assert "latest full day Sun 18 Oct · last 7 days 12–18 Oct" in html and "7-day verdicts vs Mar 2026 / Aug 2025" in text
+    assert "latest full day Sun 18 Oct · last 7 days 12–18 Oct" in html
     assert "† Android Aug 2025" in text and "data to 05:00 PT" in text
     assert "pool" not in (html + text).lower() and "today" not in (html + text).lower()
     # one class attribute per tag (a duplicate drops the dark-mode class), and every role colour has a dark override
@@ -526,6 +528,19 @@ def early_model(raw=None, **kw):
     return m
 
 
+@pytest.mark.parametrize("with_early", [True, False])
+def test_verdict_blocks_are_absent_from_email_body(tmp_path, with_early):
+    m = early_model()
+    if not with_early:
+        m["early"] = None
+    _, html, text, _ = R.render(m, "A", tmp_path)
+    preheader = re.search(r'<div style="display:none;[^"]*">.*?</div>', html, re.S)
+    assert preheader is not None and "Steps" in preheader.group()
+    body_html = html[:preheader.start()] + html[preheader.end():]
+    assert "7-day verdicts" not in text and "Steps" not in text
+    assert "7-day verdicts" not in body_html and "Steps" not in body_html
+
+
 def test_early_sql_is_opt_in_and_caps_every_window():
     s, e, c = dt.datetime(2026, 10, 12, 7), dt.datetime(2026, 10, 20, 7), dt.datetime(2026, 10, 20, 12)
     dls = {dt.date(2026, 10, 19): c, dt.date(2026, 10, 18): dt.datetime(2026, 10, 19, 12)}
@@ -568,9 +583,10 @@ def test_early_render_subject_dateline_grid_and_block(tmp_path):
     assert subj.startswith("TravelAnimator install→paid · Mon 19 Oct (early): iOS 3.0%")
     assert "early Mon 19 Oct · latest full day Sun 18 Oct" in html
     assert "Early read, provisional: what Mon 19 Oct installs had done by 05:00 PT Tue 20 Oct" in html
-    assert "Mon 19 Oct (early)" in html and "No installs yet on Mon 19 Oct." in html
+    assert "Mon 19 Oct (early)" in html and "No installs yet on Mon 19 Oct." not in html
     assert "Early read, provisional" in text and "Judged on the 7 days, never the single day" not in text
-    assert "measured at the same point" in text
+    assert "measured the same way" not in html + text
+    assert "measured at the same point" not in html + text
 
 
 def test_without_early_the_email_is_unchanged(tmp_path):
@@ -640,8 +656,9 @@ def test_bars_show_the_latest_day_not_the_week(tmp_path):
 def test_no_installs_on_the_latest_day(tmp_path):
     m = model({"ios": [row("4.1.0", FIRST, 900)], "android": []})
     _, html, text, _ = R.render(m, "A", tmp_path)
-    assert "No installs on Sun 18 Oct. The 7-day verdicts are above." in text
-    assert "No installs on Sun 18 Oct. The 7-day verdicts are above." in html
+    assert "  No installs on Sun 18 Oct." in text.splitlines()
+    assert "No installs on Sun 18 Oct." in html
+    assert "The 7-day verdicts are above." not in html + text
 
 
 def test_footer_links_point_at_product_actions():

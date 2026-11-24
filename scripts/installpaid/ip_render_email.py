@@ -405,38 +405,14 @@ def early_caption(model):
     e = early_of(model)
     label = get_edition(model.get("edition", "pt")).label
     return (f"Early read, provisional: what {day_label(e['day'])} installs had done by 05:00 {label} "
-            f"{day_label(model['report_date'])}. Late events can still change it. Compared with the 7 days before "
-            f"({week_txt(model['first_day'], model['last_day'])}), measured the same way.")
+            f"{day_label(model['report_date'])}. Late events can still change it.")
 
 
 def _early(model):
     if not early_of(model):
         return ""
-    out = [f'<p style="margin:0; font-family:{FONT_BODY}; font-size:12px; color:{CTX};" class="hl-ctx">'
-           f'{esc(early_caption(model))}</p>']
-    for t in model["tracks"]:
-        l1, _, l2, _ = early_lines(t, model)
-        out.append(f'<p style="margin:14px 0 0 0; font-family:{FONT_HEADING}; font-size:15px; font-weight:700; '
-                   f'color:{INK};" class="hl-num">{esc(t["label"])}</p>'
-                   f'<p style="margin:2px 0 0 0; font-family:{FONT_BODY}; font-size:15px; line-height:1.55;" '
-                   f'class="text-main">{l1}</p>' +
-                   (f'<p style="margin:2px 0 0 0; font-family:{FONT_BODY}; font-size:15px; line-height:1.55;" '
-                    f'class="text-main">{l2}</p>' if l2 else ""))
-    return _row("".join(out), 24)
-
-
-def _lead(model):
-    out = [f'<p style="margin:0; font-family:{FONT_BODY}; font-size:12px; color:{CTX};" class="hl-ctx">'
-           f'7-day verdicts vs Mar 2026 / Aug 2025</p>']
-    for t in model["tracks"]:
-        l1, _, l2, _ = read_lines(t, model)
-        out.append(f'<p style="margin:14px 0 0 0; font-family:{FONT_HEADING}; font-size:15px; font-weight:700; '
-                   f'color:{INK};" class="hl-num">{esc(t["label"])}</p>'
-                   f'<p style="margin:2px 0 0 0; font-family:{FONT_BODY}; font-size:15px; line-height:1.55;" '
-                   f'class="text-main">{l1}</p>' +
-                   (f'<p style="margin:2px 0 0 0; font-family:{FONT_BODY}; font-size:15px; line-height:1.55;" '
-                    f'class="text-main">{l2}</p>' if l2 else ""))
-    return _row("".join(out), 24)
+    return _row(f'<p style="margin:0; font-family:{FONT_BODY}; font-size:12px; color:{CTX};" class="hl-ctx">'
+                f'{esc(early_caption(model))}</p>', 24)
 
 
 def _legend():
@@ -512,7 +488,7 @@ def _funnel_a(t, model):
     """Bars show the latest full day; the 7-day rate is the grey line under each figure."""
     lab, d = day_label(model["last_day"]), t["day"]
     if not d.get("n"):
-        return _muted(esc(f"No installs on {lab}. The 7-day verdicts are above."), 13, 0) + _client_note(t)
+        return _muted(esc(f"No installs on {lab}."), 13, 0) + _client_note(t)
     cap = _muted(esc(f"Bars: {lab} only · {num(d['n'])} installs · {num(d.get('paid', 0))} payer{'' if d.get('paid', 0) == 1 else 's'}. "
                      f"Grey line: the 7 days."), 12, 0)
     rows = []
@@ -678,8 +654,7 @@ def footnote_lines(model, variant="A"):
         f"05:00 {edition.label}.",
         "Better or worse when the 95% interval of the difference excludes zero; otherwise same when the whole interval "
         "lies within ±10% of the benchmark rate; otherwise can't tell yet. " + (
-            ("Verdicts against Mar 2026 / Aug 2025 are judged on the 7 full days; the early read is a separate check of "
-             "the newest day against the 7 days before it, measured at the same point."
+            ("Verdicts against Mar 2026 / Aug 2025 are judged on the 7 full days."
              if early_of(model) else "Verdicts are judged on the 7 days.") +
             (" The bars and their Mar/Aug colours show the latest full day only, so they are noisier."
              if variant == "A" else "" if early_of(model) else " Never the single day.")),
@@ -721,13 +696,6 @@ def _text(model, subject, variant="A"):
                    f"7 days {pct(t['rates']['paid'][0])}")
     if early_of(model):
         out += ["", early_caption(model)]
-        for t in model["tracks"]:
-            _, l1, _, l2 = early_lines(t, model)
-            out += [t["label"], "  " + l1] + (["  " + l2] if l2 else [])
-    out += ["", "7-day verdicts vs Mar 2026 / Aug 2025"]
-    for t in model["tracks"]:
-        _, l1, _, l2 = read_lines(t, model)
-        out += [t["label"], "  " + l1] + (["  " + l2] if l2 else [])
     for t in model["tracks"]:
         out += ["", f"{t['store']} · {t['label']}"]
         if t["empty"]:
@@ -741,7 +709,7 @@ def _text(model, subject, variant="A"):
                 out.append(f"  {STEP_NAMES[k]}: {pct(t['rates'][k][0])} · {delta(t, model, 'mar26', k)[1]} · "
                            f"{delta(t, model, 'aug25', k)[1]}")
         elif not d.get("n"):
-            out.append(f"  No installs on {lab}. The 7-day verdicts are above.")
+            out.append(f"  No installs on {lab}.")
         else:
             out.append(f"  {lab} only · {num(d['n'])} installs · {num(d.get('paid', 0))} payer{'' if d.get('paid', 0) == 1 else 's'}:")
             for k in steps_for(t):
@@ -790,7 +758,7 @@ def _render(model, variant, out_dir):
         preheader = subject
     parts = [
         _masthead("Lascade · TravelAnimator", "Install → paid", dateline(model)),
-        _stat_grid(model), _early(model), _lead(model), _row(_legend(), 14),
+        _stat_grid(model), _early(model), _row(_legend(), 14),
         "".join(_track(t, model, variant, out_dir, images) for t in model["tracks"]),
         _footnotes(model, variant),
     ]
